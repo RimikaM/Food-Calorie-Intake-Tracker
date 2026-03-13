@@ -1,0 +1,53 @@
+{% extends "base.html" %}
+
+{% block body %}
+<main>
+  <section class="card">
+    <div class="card-header">
+      <div>
+        <div class="card-title">{{ day.strftime("%A") }}</div>
+        <div class="subtle">{{ day.isoformat() }}</div>
+      </div>
+    </div>
+
+    {% if entries %}
+    <ul class="list">
+      {% for e in entries %}
+      <li class="entry">
+        <div class="entry-main">
+          <div>{{ e.food }}</div>
+          <div class="entry-meta">
+            <span>{{ e.eaten_at.strftime("%H:%M") }}</span>
+            {% if e.meal %}
+            <span>·</span>
+            <span>{{ e.meal|title }}</span>
+            {% endif %}
+            {% if e.protein_g is not none or e.carbs_g is not none or e.fat_g is not none %}
+            <span>·</span>
+            <span>
+              {% if e.protein_g is not none %}P {{ "%.1f"|format(e.protein_g) }}g{% endif %}
+              {% if e.carbs_g is not none %}{% if e.protein_g is not none %} · {% endif %}C {{ "%.1f"|format(e.carbs_g) }}g{% endif %}
+              {% if e.fat_g is not none %}{% if e.protein_g is not none or e.carbs_g is not none %} · {% endif %}F {{ "%.1f"|format(e.fat_g) }}g{% endif %}
+            </span>
+            {% endif %}
+            {% if e.notes %}
+            <span>·</span>
+            <span>{{ e.notes }}</span>
+            {% endif %}
+          </div>
+        </div>
+        <div class="entry-cal">{{ e.calories }} kcal</div>
+      </li>
+      {% endfor %}
+    </ul>
+    <div class="total-row">
+      <span class="tag">Total</span>
+      <span>{{ total }} kcal</span>
+    </div>
+    {% else %}
+    <p class="list-empty">No entries for this day.</p>
+    {% endif %}
+  </section>
+</main>
+{% endblock %}
+

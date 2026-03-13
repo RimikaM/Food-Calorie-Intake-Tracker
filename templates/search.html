@@ -1,0 +1,114 @@
+{% extends "base.html" %}
+
+{% block body %}
+<main>
+  <section class="card">
+    <div class="card-header">
+      <div>
+        <div class="card-title">Search USDA foods</div>
+        <div class="subtle">Type a food name and pick a match</div>
+      </div>
+    </div>
+
+    <form method="post" action="{{ url_for('foods_search') }}">
+      <div>
+        <label for="query">Food name</label>
+        <input
+          id="query"
+          name="query"
+          type="text"
+          value="{{ query }}"
+          placeholder="e.g. grilled chicken breast, apple, rice"
+          required
+        />
+      </div>
+      <div class="actions">
+        <button type="submit">Search</button>
+      </div>
+    </form>
+  </section>
+
+  <section class="card">
+    <div class="card-header">
+      <div>
+        <div class="card-title">Results</div>
+        <div class="subtle">
+          {% if query %}
+          Showing matches for “{{ query }}”
+          {% else %}
+          Results will appear here after you search.
+          {% endif %}
+        </div>
+      </div>
+    </div>
+
+    {% if error %}
+    <p class="list-empty" style="color: #fca5a5">{{ error }}</p>
+    {% endif %}
+
+    {% if results %}
+    <ul class="list">
+      {% for f in results %}
+      <li class="entry">
+        <div class="entry-main">
+          <div>{{ f.description }}</div>
+          <div class="entry-meta">
+            {% if f.brand %}
+            <span>{{ f.brand }}</span>
+            <span>·</span>
+            {% endif %}
+            <span>FDC {{ f.fdc_id }}</span>
+          </div>
+          <div class="entry-meta">
+            {% if f.calories is not none %}
+            <span>{{ "%.0f"|format(f.calories) }} kcal</span>
+            {% endif %}
+            {% if f.protein_g is not none %}
+            <span>· P {{ "%.1f"|format(f.protein_g) }}g</span>
+            {% endif %}
+            {% if f.carbs_g is not none %}
+            <span>· C {{ "%.1f"|format(f.carbs_g) }}g</span>
+            {% endif %}
+            {% if f.fat_g is not none %}
+            <span>· F {{ "%.1f"|format(f.fat_g) }}g</span>
+            {% endif %}
+          </div>
+        </div>
+        <div>
+          <form method="post" action="{{ url_for('foods_select') }}">
+            <input type="hidden" name="fdc_id" value="{{ f.fdc_id }}" />
+            <input type="hidden" name="description" value="{{ f.description }}" />
+            <input type="hidden" name="brand" value="{{ f.brand or '' }}" />
+            <input
+              type="hidden"
+              name="calories"
+              value="{{ f.calories if f.calories is not none else '' }}"
+            />
+            <input
+              type="hidden"
+              name="protein_g"
+              value="{{ f.protein_g if f.protein_g is not none else '' }}"
+            />
+            <input
+              type="hidden"
+              name="carbs_g"
+              value="{{ f.carbs_g if f.carbs_g is not none else '' }}"
+            />
+            <input
+              type="hidden"
+              name="fat_g"
+              value="{{ f.fat_g if f.fat_g is not none else '' }}"
+            />
+            <button type="submit">Use</button>
+          </form>
+        </div>
+      </li>
+      {% endfor %}
+    </ul>
+    {% else %}
+    <p class="list-empty">No results yet.</p>
+    {% endif %}
+  </section>
+</main>
+{% endblock %}
+
