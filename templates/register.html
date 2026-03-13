@@ -1,0 +1,54 @@
+{% extends "base.html" %}
+
+{% block body %}
+<main style="display: flex; justify-content: center; align-items: flex-start; padding-top: 40px;">
+  <section class="card" style="width: 100%; max-width: 400px;">
+    <div class="card-header">
+      <div>
+        <div class="card-title">Create account</div>
+        <div class="subtle">Start tracking your calorie intake.</div>
+      </div>
+    </div>
+
+    {% if error %}
+    <p style="color: var(--danger); font-size: 0.85rem; margin: 0 0 10px;">{{ error }}</p>
+    {% endif %}
+
+    <form method="post" action="{{ url_for('register') }}">
+      <div>
+        <label for="username">Username</label>
+        <input
+          id="username"
+          name="username"
+          type="text"
+          placeholder="choose a username"
+          autocomplete="username"
+          required
+        />
+      </div>
+
+      <div>
+        <label for="password">Password <span style="color: var(--muted);">(min 6 characters)</span></label>
+        <input
+          id="password"
+          name="password"
+          type="password"
+          placeholder="••••••••"
+          autocomplete="new-password"
+          minlength="6"
+          required
+        />
+      </div>
+
+      <div class="actions">
+        <button type="submit">Create account</button>
+      </div>
+    </form>
+
+    <p style="font-size: 0.8rem; color: var(--muted); margin-top: 14px; text-align: center;">
+      Already have an account?
+      <a href="{{ url_for('login') }}" style="color: var(--accent); text-decoration: none;">Sign in</a>
+    </p>
+  </section>
+</main>
+{% endblock %}

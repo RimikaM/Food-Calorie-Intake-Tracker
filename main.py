@@ -4,6 +4,8 @@ from datetime import datetime, date
 from pathlib import Path
 from typing import List, Optional
 
+from werkzeug.security import check_password_hash, generate_password_hash
+
 
 DB_PATH = Path(__file__).with_name("calories.db")
 
@@ -34,6 +36,13 @@ class Food:
     fat_g: Optional[float]
 
 
+@dataclass
+class User:
+    id: int
+    username: str
+    password_hash: str
+
+
 def get_connection() -> sqlite3.Connection:
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
@@ -42,6 +51,15 @@ def get_connection() -> sqlite3.Connection:
 
 def init_db() -> None:
     with get_connection() as conn:
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS users (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                username TEXT UNIQUE NOT NULL,
+                password_hash TEXT NOT NULL
+            );
+            """
+        )
         conn.execute(
             """
             CREATE TABLE IF NOT EXISTS entries (
@@ -54,7 +72,8 @@ def init_db() -> None:
                 fat_g REAL,
                 meal TEXT,
                 servings REAL,
-                notes TEXT
+                notes TEXT,
+                user_id INTEGER REFERENCES users(id)
             );
             """
         )
@@ -79,6 +98,7 @@ def init_db() -> None:
             "fat_g REAL",
             "meal TEXT",
             "servings REAL",
+            "user_id INTEGER REFERENCES users(id)",
         ):
             try:
                 conn.execute(f"ALTER TABLE entries ADD COLUMN {column_sql}")
@@ -96,13 +116,14 @@ def add_entry(
     fat_g: Optional[float] = None,
     meal: Optional[str] = None,
     servings: Optional[float] = None,
+    user_id: Optional[int] = None,
 ) -> None:
     now = datetime.now().isoformat(timespec="minutes")
     with get_connection() as conn:
         conn.execute(
             """
-            INSERT INTO entries (eaten_at, food, calories, protein_g, carbs_g, fat_g, meal, servings, notes)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO entries (eaten_at, food, calories, protein_g, carbs_g, fat_g, meal, servings, notes, user_id)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 now,
@@ -114,11 +135,12 @@ def add_entry(
                 meal,
                 servings,
                 notes.strip() if notes else None,
+                user_id,
             ),
         )
 
 
-def fetch_entries_for_date(day: date) -> List[Entry]:
+def fetch_entries_for_date(day: date, user_id: Optional[int] = None) -> List[Entry]:
     day_str = day.isoformat()
     start = f"{day_str}T00:00"
     end = f"{day_str}T23:59"
@@ -137,9 +159,10 @@ def fetch_entries_for_date(day: date) -> List[Entry]:
                    notes
             FROM entries
             WHERE eaten_at BETWEEN ? AND ?
+              AND (user_id = ? OR (? IS NULL AND user_id IS NULL))
             ORDER BY eaten_at ASC
             """,
-            (start, end),
+            (start, end, user_id, user_id),
         ).fetchall()
     entries: List[Entry] = []
     for r in rows:
@@ -160,7 +183,7 @@ def fetch_entries_for_date(day: date) -> List[Entry]:
     return entries
 
 
-def fetch_all_entries() -> list[Entry]:
+def fetch_all_entries(user_id: Optional[int] = None) -> list[Entry]:
     """Return all logged entries, newest first."""
     with get_connection() as conn:
         rows = conn.execute(
@@ -176,8 +199,10 @@ def fetch_all_entries() -> list[Entry]:
                    servings,
                    notes
             FROM entries
+            WHERE user_id = ? OR (? IS NULL AND user_id IS NULL)
             ORDER BY eaten_at DESC
-            """
+            """,
+            (user_id, user_id),
         ).fetchall()
     entries: list[Entry] = []
     for r in rows:
@@ -198,7 +223,7 @@ def fetch_all_entries() -> list[Entry]:
     return entries
 
 
-def fetch_recent_days(limit: int = 7):
+def fetch_recent_days(limit: int = 7, user_id: Optional[int] = None):
     with get_connection() as conn:
         rows = conn.execute(
             """
@@ -206,11 +231,12 @@ def fetch_recent_days(limit: int = 7):
                    SUM(calories) as total_calories,
                    COUNT(*) as items
             FROM entries
+            WHERE user_id = ? OR (? IS NULL AND user_id IS NULL)
             GROUP BY day
             ORDER BY day DESC
             LIMIT ?
             """,
-            (limit,),
+            (user_id, user_id, limit),
         ).fetchall()
     return rows
 
@@ -279,6 +305,37 @@ def get_food_by_id(food_id: int) -> Optional[Food]:
             carbs_g=row["carbs_g"],
             fat_g=row["fat_g"],
         )
+
+
+def create_user(username: str, password: str) -> Optional[User]:
+    """Create a new user. Returns the User on success, None if username is taken."""
+    password_hash = generate_password_hash(password)
+    try:
+        with get_connection() as conn:
+            cur = conn.execute(
+                "INSERT INTO users (username, password_hash) VALUES (?, ?)",
+                (username.strip(), password_hash),
+            )
+            return User(id=cur.lastrowid, username=username.strip(), password_hash=password_hash)
+    except sqlite3.IntegrityError:
+        return None
+
+
+def get_user_by_username(username: str) -> Optional[User]:
+    """Look up a user by username."""
+    with get_connection() as conn:
+        row = conn.execute(
+            "SELECT id, username, password_hash FROM users WHERE username = ?",
+            (username.strip(),),
+        ).fetchone()
+    if not row:
+        return None
+    return User(id=row["id"], username=row["username"], password_hash=row["password_hash"])
+
+
+def verify_password(user: User, password: str) -> bool:
+    """Return True if the plaintext password matches the stored hash."""
+    return check_password_hash(user.password_hash, password)
 
 
 def input_int(prompt: str) -> int:

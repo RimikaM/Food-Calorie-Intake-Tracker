@@ -304,12 +304,19 @@
           <span class="pill">Daily check-in</span>
         </div>
         <nav>
+          {% if username %}
           <a href="{{ url_for('index') }}" class="{% if active == 'today' %}active{% endif %}"
             >Today</a
           >
           <a href="{{ url_for('history') }}" class="{% if active == 'history' %}active{% endif %}"
             >7‑day history</a
           >
+          <span style="color: var(--muted); font-size: 0.8rem; padding: 4px 6px; align-self: center;">{{ username }}</span>
+          <a href="{{ url_for('logout') }}" style="color: var(--muted);">Sign out</a>
+          {% else %}
+          <a href="{{ url_for('login') }}">Sign in</a>
+          <a href="{{ url_for('register') }}">Register</a>
+          {% endif %}
         </nav>
       </header>
 
