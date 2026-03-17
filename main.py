@@ -4,6 +4,8 @@ from datetime import datetime, date
 from pathlib import Path
 from typing import List, Optional
 
+from werkzeug.security import generate_password_hash, check_password_hash
+
 
 DB_PATH = Path(__file__).with_name("calories.db")
 
@@ -34,6 +36,13 @@ class Food:
     fat_g: Optional[float]
 
 
+@dataclass
+class User:
+    id: int
+    username: str
+    password_hash: str
+
+
 def get_connection() -> sqlite3.Connection:
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
@@ -44,8 +53,18 @@ def init_db() -> None:
     with get_connection() as conn:
         conn.execute(
             """
+            CREATE TABLE IF NOT EXISTS users (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                username TEXT UNIQUE NOT NULL,
+                password_hash TEXT NOT NULL
+            );
+            """
+        )
+        conn.execute(
+            """
             CREATE TABLE IF NOT EXISTS entries (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL REFERENCES users(id),
                 eaten_at TEXT NOT NULL,
                 food TEXT NOT NULL,
                 calories INTEGER NOT NULL,
@@ -72,7 +91,17 @@ def init_db() -> None:
             );
             """
         )
-        # Best-effort migration if table existed before columns were added.
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS settings (
+                user_id INTEGER NOT NULL REFERENCES users(id),
+                key TEXT NOT NULL,
+                value TEXT NOT NULL,
+                PRIMARY KEY (user_id, key)
+            );
+            """
+        )
+        # Best-effort migrations for pre-existing DBs.
         for column_sql in (
             "protein_g REAL",
             "carbs_g REAL",
@@ -83,13 +112,49 @@ def init_db() -> None:
             try:
                 conn.execute(f"ALTER TABLE entries ADD COLUMN {column_sql}")
             except sqlite3.OperationalError:
-                # Column already exists or table freshly created.
                 pass
+        try:
+            conn.execute("ALTER TABLE entries ADD COLUMN user_id INTEGER")
+        except sqlite3.OperationalError:
+            pass
+        try:
+            conn.execute("ALTER TABLE settings ADD COLUMN user_id INTEGER")
+        except sqlite3.OperationalError:
+            pass
+        # If settings table still has the old single-column PK (key TEXT PRIMARY KEY),
+        # migrate it to the composite (user_id, key) PK required by ON CONFLICT upserts.
+        old_schema = conn.execute(
+            "SELECT sql FROM sqlite_master WHERE type='table' AND name='settings'"
+        ).fetchone()
+        if old_schema and "user_id" not in old_schema["sql"].split("PRIMARY KEY")[0].strip().upper().split()[-1:][0] if old_schema["sql"] else False:
+            pass  # already composite
+        try:
+            # Detect old schema: PRIMARY KEY is just (key), not (user_id, key)
+            pk_info = conn.execute("PRAGMA table_info(settings)").fetchall()
+            pk_cols = [row["name"] for row in pk_info if row["pk"] > 0]
+            if pk_cols == ["key"]:
+                conn.execute("""
+                    CREATE TABLE IF NOT EXISTS settings_migration (
+                        user_id INTEGER NOT NULL,
+                        key TEXT NOT NULL,
+                        value TEXT NOT NULL,
+                        PRIMARY KEY (user_id, key)
+                    )
+                """)
+                conn.execute("""
+                    INSERT OR IGNORE INTO settings_migration (user_id, key, value)
+                    SELECT user_id, key, value FROM settings WHERE user_id IS NOT NULL
+                """)
+                conn.execute("DROP TABLE settings")
+                conn.execute("ALTER TABLE settings_migration RENAME TO settings")
+        except sqlite3.OperationalError:
+            pass
 
 
 def add_entry(
     food: str,
     calories: int,
+    user_id: int,
     notes: Optional[str] = None,
     protein_g: Optional[float] = None,
     carbs_g: Optional[float] = None,
@@ -101,10 +166,11 @@ def add_entry(
     with get_connection() as conn:
         conn.execute(
             """
-            INSERT INTO entries (eaten_at, food, calories, protein_g, carbs_g, fat_g, meal, servings, notes)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO entries (user_id, eaten_at, food, calories, protein_g, carbs_g, fat_g, meal, servings, notes)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
+                user_id,
                 now,
                 food.strip(),
                 calories,
@@ -118,28 +184,19 @@ def add_entry(
         )
 
 
-def fetch_entries_for_date(day: date) -> List[Entry]:
+def fetch_entries_for_date(day: date, user_id: int) -> List[Entry]:
     day_str = day.isoformat()
     start = f"{day_str}T00:00"
     end = f"{day_str}T23:59"
     with get_connection() as conn:
         rows = conn.execute(
             """
-            SELECT id,
-                   eaten_at,
-                   food,
-                   calories,
-                   protein_g,
-                   carbs_g,
-                   fat_g,
-                   meal,
-                   servings,
-                   notes
+            SELECT id, eaten_at, food, calories, protein_g, carbs_g, fat_g, meal, servings, notes
             FROM entries
-            WHERE eaten_at BETWEEN ? AND ?
+            WHERE user_id = ? AND eaten_at BETWEEN ? AND ?
             ORDER BY eaten_at ASC
             """,
-            (start, end),
+            (user_id, start, end),
         ).fetchall()
     entries: List[Entry] = []
     for r in rows:
@@ -160,24 +217,17 @@ def fetch_entries_for_date(day: date) -> List[Entry]:
     return entries
 
 
-def fetch_all_entries() -> list[Entry]:
-    """Return all logged entries, newest first."""
+def fetch_all_entries(user_id: int) -> list[Entry]:
+    """Return all logged entries for a user, newest first."""
     with get_connection() as conn:
         rows = conn.execute(
             """
-            SELECT id,
-                   eaten_at,
-                   food,
-                   calories,
-                   protein_g,
-                   carbs_g,
-                   fat_g,
-                   meal,
-                   servings,
-                   notes
+            SELECT id, eaten_at, food, calories, protein_g, carbs_g, fat_g, meal, servings, notes
             FROM entries
+            WHERE user_id = ?
             ORDER BY eaten_at DESC
-            """
+            """,
+            (user_id,),
         ).fetchall()
     entries: list[Entry] = []
     for r in rows:
@@ -198,7 +248,7 @@ def fetch_all_entries() -> list[Entry]:
     return entries
 
 
-def fetch_recent_days(limit: int = 7):
+def fetch_recent_days(user_id: int, limit: int = 7):
     with get_connection() as conn:
         rows = conn.execute(
             """
@@ -206,11 +256,12 @@ def fetch_recent_days(limit: int = 7):
                    SUM(calories) as total_calories,
                    COUNT(*) as items
             FROM entries
+            WHERE user_id = ?
             GROUP BY day
             ORDER BY day DESC
             LIMIT ?
             """,
-            (limit,),
+            (user_id, limit),
         ).fetchall()
     return rows
 
@@ -279,6 +330,71 @@ def get_food_by_id(food_id: int) -> Optional[Food]:
             carbs_g=row["carbs_g"],
             fat_g=row["fat_g"],
         )
+
+
+def get_setting(key: str, user_id: int, default: Optional[str] = None) -> Optional[str]:
+    with get_connection() as conn:
+        row = conn.execute(
+            "SELECT value FROM settings WHERE user_id = ? AND key = ?", (user_id, key)
+        ).fetchone()
+    return row["value"] if row else default
+
+
+def set_setting(key: str, value: str, user_id: int) -> None:
+    with get_connection() as conn:
+        conn.execute(
+            "INSERT INTO settings (user_id, key, value) VALUES (?, ?, ?) "
+            "ON CONFLICT(user_id, key) DO UPDATE SET value = excluded.value",
+            (user_id, key, value),
+        )
+
+
+def get_calorie_goal(user_id: int) -> Optional[int]:
+    raw = get_setting("calorie_goal", user_id)
+    try:
+        return int(raw) if raw is not None else None
+    except ValueError:
+        return None
+
+
+def create_user(username: str, password: str) -> Optional[User]:
+    """Create a new user. Returns the User or None if the username is taken."""
+    hashed = generate_password_hash(password)
+    try:
+        with get_connection() as conn:
+            cur = conn.execute(
+                "INSERT INTO users (username, password_hash) VALUES (?, ?)",
+                (username.strip(), hashed),
+            )
+            return User(id=cur.lastrowid, username=username.strip(), password_hash=hashed)
+    except sqlite3.IntegrityError:
+        return None  # username already exists
+
+
+def get_user_by_username(username: str) -> Optional[User]:
+    with get_connection() as conn:
+        row = conn.execute(
+            "SELECT id, username, password_hash FROM users WHERE username = ?",
+            (username.strip(),),
+        ).fetchone()
+    if not row:
+        return None
+    return User(id=row["id"], username=row["username"], password_hash=row["password_hash"])
+
+
+def get_user_by_id(user_id: int) -> Optional[User]:
+    with get_connection() as conn:
+        row = conn.execute(
+            "SELECT id, username, password_hash FROM users WHERE id = ?",
+            (user_id,),
+        ).fetchone()
+    if not row:
+        return None
+    return User(id=row["id"], username=row["username"], password_hash=row["password_hash"])
+
+
+def verify_password(user: User, password: str) -> bool:
+    return check_password_hash(user.password_hash, password)
 
 
 def input_int(prompt: str) -> int:

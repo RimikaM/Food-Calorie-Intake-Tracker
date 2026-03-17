@@ -308,8 +308,15 @@
             >Today</a
           >
           <a href="{{ url_for('history') }}" class="{% if active == 'history' %}active{% endif %}"
-            >7‑day history</a
+            >2‑month history</a
           >
+          <a href="{{ url_for('settings_view') }}" class="{% if active == 'settings' %}active{% endif %}"
+            >Settings</a
+          >
+          {% if current_user.is_authenticated %}
+          <span style="font-size:0.8rem;color:var(--muted);padding:4px 6px">{{ current_user.username }}</span>
+          <a href="{{ url_for('logout') }}">Log out</a>
+          {% endif %}
         </nav>
       </header>
 

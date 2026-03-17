@@ -1,0 +1,37 @@
+{% extends "base.html" %}
+
+{% block body %}
+<main>
+  <section class="card">
+    <div class="card-header">
+      <div>
+        <div class="card-title">Settings</div>
+        <div class="subtle">Set your daily calorie goal</div>
+      </div>
+    </div>
+
+    {% if saved %}
+    <p style="color: #86efac; font-size: 0.85rem; margin-bottom: 8px;">✓ Goal saved!</p>
+    {% endif %}
+
+    <form method="post" action="{{ url_for('settings_save') }}">
+      <div>
+        <label for="calorie_goal">Daily calorie goal (kcal)</label>
+        <input
+          id="calorie_goal"
+          name="calorie_goal"
+          type="number"
+          min="1"
+          step="1"
+          value="{{ goal if goal is not none else '' }}"
+          placeholder="e.g. 2000"
+          required
+        />
+      </div>
+      <div class="actions">
+        <button type="submit">Save goal</button>
+      </div>
+    </form>
+  </section>
+</main>
+{% endblock %}

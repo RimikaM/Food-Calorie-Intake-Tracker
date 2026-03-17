@@ -5,7 +5,7 @@
   <section class="card">
     <div class="card-header">
       <div>
-        <div class="card-title">Last 7 days</div>
+        <div class="card-title">Last 2 months</div>
         <div class="subtle">Tap a day to open its log</div>
       </div>
     </div>
@@ -18,7 +18,7 @@
           <div>
             <a href="{{ url_for('day_view', day_str=d.day) }}">{{ d.day }}</a>
           </div>
-          <div class="subtle">{{ d.items }} item(s)</div>
+          <div class="subtle">{{ d.entry_count }} item(s)</div>
         </div>
         <div>{{ d.total_calories }} kcal</div>
       </li>
