@@ -1,0 +1,26 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Database (live data — not for version control)
+calories.db
+
+# Environment variables
+.env
+
+# macOS
+.DS_Store
+
+# pytest
+.pytest_cache/
