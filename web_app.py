@@ -309,5 +309,6 @@ def settings_save():
 
 if __name__ == "__main__":
     port = int(os.getenv("PORT", "5000"))
-    app.run(debug=True, use_reloader=False, port=port)
+    debug = os.getenv("FLASK_ENV", "production") == "development"
+    app.run(debug=debug, use_reloader=False, port=port)
 
