@@ -1,0 +1,137 @@
+{% extends "base.html" %}
+
+{% block body %}
+<main>
+  <section class="card">
+    <div class="card-header">
+      <div>
+        <div class="card-title">Edit entry</div>
+        <div class="subtle">
+          {% if entry.eaten_at %}{{ entry.eaten_at.strftime("%Y-%m-%d %H:%M") }}{% endif %}
+        </div>
+      </div>
+    </div>
+
+    <form method="post" action="{{ url_for('edit_entry_post', entry_id=entry.id) }}">
+      <div>
+        <label for="food">Food / meal</label>
+        <input
+          id="food"
+          name="food"
+          type="text"
+          value="{{ entry.food }}"
+          required
+        />
+      </div>
+
+      <div>
+        <label for="calories">Calories (kcal)</label>
+        <input
+          id="calories"
+          name="calories"
+          type="number"
+          min="0"
+          step="1"
+          value="{{ entry.calories }}"
+          required
+        />
+      </div>
+
+      <div>
+        <label for="eaten_date">Date</label>
+        <input
+          id="eaten_date"
+          name="eaten_date"
+          type="date"
+          value="{{ entry.eaten_at.strftime("%Y-%m-%d") }}"
+          required
+        />
+      </div>
+
+      <div>
+        <label for="eaten_time">Time</label>
+        <input
+          id="eaten_time"
+          name="eaten_time"
+          type="time"
+          value="{{ entry.eaten_at.strftime("%H:%M") }}"
+          required
+        />
+      </div>
+
+      <div>
+        <label for="protein_g">Protein (g)</label>
+        <input
+          id="protein_g"
+          name="protein_g"
+          type="number"
+          min="0"
+          step="0.1"
+          value="{% if entry.protein_g is not none %}{{ entry.protein_g }}{% endif %}"
+        />
+      </div>
+
+      <div>
+        <label for="carbs_g">Carbs (g)</label>
+        <input
+          id="carbs_g"
+          name="carbs_g"
+          type="number"
+          min="0"
+          step="0.1"
+          value="{% if entry.carbs_g is not none %}{{ entry.carbs_g }}{% endif %}"
+        />
+      </div>
+
+      <div>
+        <label for="fat_g">Fat (g)</label>
+        <input
+          id="fat_g"
+          name="fat_g"
+          type="number"
+          min="0"
+          step="0.1"
+          value="{% if entry.fat_g is not none %}{{ entry.fat_g }}{% endif %}"
+        />
+      </div>
+
+      <div>
+        <label for="servings">Servings</label>
+        <input
+          id="servings"
+          name="servings"
+          type="number"
+          min="0"
+          step="0.1"
+          value="{% if entry.servings is not none %}{{ entry.servings }}{% else %}1{% endif %}"
+        />
+      </div>
+
+      <div>
+        <label for="meal">Meal</label>
+        <select id="meal" name="meal">
+          <option value="">Unspecified</option>
+          <option value="breakfast" {% if entry.meal == "breakfast" %}selected{% endif %}>Breakfast</option>
+          <option value="lunch" {% if entry.meal == "lunch" %}selected{% endif %}>Lunch</option>
+          <option value="dinner" {% if entry.meal == "dinner" %}selected{% endif %}>Dinner</option>
+          <option value="snack" {% if entry.meal == "snack" %}selected{% endif %}>Snack</option>
+        </select>
+      </div>
+
+      <div>
+        <label for="notes">Notes (optional)</label>
+        <textarea
+          id="notes"
+          name="notes"
+          placeholder="Any notes about this entry?"
+        >{% if entry.notes %}{{ entry.notes }}{% endif %}</textarea>
+      </div>
+
+      <div class="actions">
+        <button type="submit">Save changes</button>
+        <a href="{{ url_for('index') }}" style="padding: 8px 16px; text-decoration: none; color: #9ca3af; border: 1px solid #9ca3af; border-radius: 4px; display: inline-block;">Cancel</a>
+      </div>
+    </form>
+  </section>
+</main>
+{% endblock %}

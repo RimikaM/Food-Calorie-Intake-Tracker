@@ -13,7 +13,7 @@
     {% if entries %}
     <ul class="list">
       {% for e in entries %}
-      <li class="entry">
+      <li class="entry" style="align-items: flex-start; gap: 8px;">
         <div class="entry-main">
           <div>{{ e.food }}</div>
           <div class="entry-meta">
@@ -39,6 +39,12 @@
             <span>{{ e.notes }}</span>
             {% endif %}
           </div>
+        </div>
+        <div style="display: flex; gap: 4px; flex-shrink: 0;">
+          <a href="{{ url_for('edit_entry_get', entry_id=e.id) }}" style="padding: 4px 8px; font-size: 0.75rem; color: var(--accent); text-decoration: none; border: 1px solid var(--accent); border-radius: 3px; cursor: pointer; white-space: nowrap;">Edit</a>
+          <form method="post" action="{{ url_for('delete_entry_route', entry_id=e.id) }}" style="display: inline; margin: 0; padding: 0;" onsubmit="return confirm('Delete this entry?');">
+            <button type="submit" style="padding: 4px 8px; font-size: 0.75rem; color: var(--danger); background: none; border: 1px solid var(--danger); border-radius: 3px; cursor: pointer; white-space: nowrap;">Delete</button>
+          </form>
         </div>
         <div class="entry-cal">{{ e.calories }} kcal</div>
       </li>

@@ -295,6 +295,7 @@
         text-decoration: underline;
       }
     </style>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
   </head>
   <body>
     <div class="shell">
@@ -309,6 +310,9 @@
           >
           <a href="{{ url_for('history') }}" class="{% if active == 'history' %}active{% endif %}"
             >2‑month history</a
+          >
+          <a href="{{ url_for('insights') }}" class="{% if active == 'insights' %}active{% endif %}"
+            >Insights</a
           >
           <a href="{{ url_for('settings_view') }}" class="{% if active == 'settings' %}active{% endif %}"
             >Settings</a

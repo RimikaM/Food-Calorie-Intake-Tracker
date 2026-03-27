@@ -1,0 +1,135 @@
+{% extends "base.html" %}
+
+{% block body %}
+<main>
+  <section class="card">
+    <div class="card-header">
+      <div>
+        <div class="card-title">This week</div>
+        <div class="subtle">{{ week_summary.week_start.isoformat() }} to {{ week_summary.week_end.isoformat() }}</div>
+      </div>
+    </div>
+
+    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-bottom: 16px;">
+      <div>
+        <div style="font-size: 0.85rem; color: var(--muted); margin-bottom: 4px;">Calories</div>
+        <div style="font-size: 1.5rem; font-weight: 500; color: var(--accent);">{{ week_summary.total_calories }} kcal</div>
+        <div style="font-size: 0.8rem; color: var(--muted);">Avg: {{ "%.0f"|format(week_summary.avg_calories) }} / day</div>
+      </div>
+      <div>
+        <div style="font-size: 0.85rem; color: var(--muted); margin-bottom: 4px;">Days logged</div>
+        <div style="font-size: 1.5rem; font-weight: 500; color: var(--accent);">{{ week_summary.days_logged }}</div>
+        <div style="font-size: 0.8rem; color: var(--muted);">Out of 7 days</div>
+      </div>
+    </div>
+
+    <div style="display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 12px;">
+      <div style="padding: 12px; background: rgba(56, 189, 248, 0.1); border-radius: 6px;">
+        <div style="font-size: 0.75rem; color: var(--muted); margin-bottom: 4px;">Protein</div>
+        <div style="font-size: 1.25rem; font-weight: 500;">{{ "%.0f"|format(week_summary.total_protein_g) }}g</div>
+        {% if protein_goal %}<span style="font-size: 0.75rem; color: var(--muted);">/ {{ protein_goal }}g</span>{% endif %}
+      </div>
+      <div style="padding: 12px; background: rgba(74, 222, 128, 0.1); border-radius: 6px;">
+        <div style="font-size: 0.75rem; color: var(--muted); margin-bottom: 4px;">Carbs</div>
+        <div style="font-size: 1.25rem; font-weight: 500;">{{ "%.0f"|format(week_summary.total_carbs_g) }}g</div>
+        {% if carbs_goal %}<span style="font-size: 0.75rem; color: var(--muted);">/ {{ carbs_goal }}g</span>{% endif %}
+      </div>
+      <div style="padding: 12px; background: rgba(249, 115, 115, 0.1); border-radius: 6px;">
+        <div style="font-size: 0.75rem; color: var(--muted); margin-bottom: 4px;">Fat</div>
+        <div style="font-size: 1.25rem; font-weight: 500;">{{ "%.0f"|format(week_summary.total_fat_g) }}g</div>
+        {% if fat_goal %}<span style="font-size: 0.75rem; color: var(--muted);">/ {{ fat_goal }}g</span>{% endif %}
+      </div>
+    </div>
+  </section>
+
+  <section class="card">
+    <div class="card-header">
+      <div>
+        <div class="card-title">4-week trends</div>
+        <div class="subtle">Weekly calorie totals</div>
+      </div>
+    </div>
+
+    <canvas id="trendsChart"></canvas>
+
+    <script>
+      const ctx = document.getElementById('trendsChart').getContext('2d');
+      const labels = [
+        {% for week in trends %}
+        '{{ week.week_start.strftime("%m/%d") }}',
+        {% endfor %}
+      ];
+      const calorieData = [{{ trends | map(attribute='total_calories') | join(', ') }}];
+
+      new Chart(ctx, {
+        type: 'bar',
+        data: {
+          labels: labels,
+          datasets: [{
+            label: 'Calories',
+            data: calorieData,
+            backgroundColor: 'rgba(56, 189, 248, 0.6)',
+            borderColor: 'rgba(56, 189, 248, 1)',
+            borderWidth: 1,
+            borderRadius: 4
+          }]
+        },
+        options: {
+          responsive: true,
+          maintainAspectRatio: true,
+          plugins: {
+            legend: {
+              display: false
+            }
+          },
+          scales: {
+            y: {
+              beginAtZero: true,
+              grid: {
+                color: 'rgba(148, 163, 184, 0.1)'
+              }
+            },
+            x: {
+              grid: {
+                display: false
+              }
+            }
+          }
+        }
+      });
+    </script>
+  </section>
+
+  <section class="card">
+    <div class="card-header">
+      <div>
+        <div class="card-title">Weekly breakdown</div>
+        <div class="subtle">All macros by week</div>
+      </div>
+    </div>
+
+    <table style="width: 100%; font-size: 0.9rem;">
+      <thead>
+        <tr style="border-bottom: 1px solid rgba(148, 163, 184, 0.3);">
+          <th style="text-align: left; padding: 8px; color: var(--muted);">Week</th>
+          <th style="text-align: right; padding: 8px; color: var(--muted);">Calories</th>
+          <th style="text-align: right; padding: 8px; color: var(--muted);">Protein</th>
+          <th style="text-align: right; padding: 8px; color: var(--muted);">Carbs</th>
+          <th style="text-align: right; padding: 8px; color: var(--muted);">Fat</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for week in trends %}
+        <tr style="border-bottom: 1px solid rgba(148, 163, 184, 0.1);">
+          <td style="padding: 8px;">{{ week.week_start.strftime("%b %d") }} – {{ week.week_end.strftime("%b %d") }}</td>
+          <td style="text-align: right; padding: 8px;">{{ week.total_calories }} kcal</td>
+          <td style="text-align: right; padding: 8px;">{{ "%.0f"|format(week.total_protein_g) }}g</td>
+          <td style="text-align: right; padding: 8px;">{{ "%.0f"|format(week.total_carbs_g) }}g</td>
+          <td style="text-align: right; padding: 8px;">{{ "%.0f"|format(week.total_fat_g) }}g</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </section>
+</main>
+{% endblock %}

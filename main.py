@@ -101,6 +101,33 @@ def init_db() -> None:
             );
             """
         )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS search_history (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL REFERENCES users(id),
+                query TEXT NOT NULL,
+                searched_at TEXT NOT NULL,
+                result_count INTEGER,
+                UNIQUE(user_id, query)
+            );
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS meal_templates (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL REFERENCES users(id),
+                name TEXT NOT NULL,
+                food_description TEXT NOT NULL,
+                calories INTEGER NOT NULL,
+                protein_g REAL,
+                carbs_g REAL,
+                fat_g REAL,
+                created_at TEXT NOT NULL
+            );
+            """
+        )
         # Best-effort migrations for pre-existing DBs.
         for column_sql in (
             "protein_g REAL",
@@ -182,6 +209,102 @@ def add_entry(
                 notes.strip() if notes else None,
             ),
         )
+
+
+def get_entry_by_id(entry_id: int, user_id: int) -> Optional[Entry]:
+    """Fetch a single entry by ID, with user ownership check."""
+    with get_connection() as conn:
+        row = conn.execute(
+            """
+            SELECT id, eaten_at, food, calories, protein_g, carbs_g, fat_g, meal, servings, notes
+            FROM entries
+            WHERE id = ? AND user_id = ?
+            """,
+            (entry_id, user_id),
+        ).fetchone()
+    if not row:
+        return None
+    return Entry(
+        id=row["id"],
+        eaten_at=datetime.fromisoformat(row["eaten_at"]),
+        food=row["food"],
+        calories=row["calories"],
+        protein_g=row["protein_g"],
+        carbs_g=row["carbs_g"],
+        fat_g=row["fat_g"],
+        meal=row["meal"],
+        servings=row["servings"],
+        notes=row["notes"],
+    )
+
+
+def update_entry(
+    entry_id: int,
+    user_id: int,
+    food: str,
+    calories: int,
+    eaten_at: Optional[str] = None,
+    protein_g: Optional[float] = None,
+    carbs_g: Optional[float] = None,
+    fat_g: Optional[float] = None,
+    meal: Optional[str] = None,
+    servings: Optional[float] = None,
+    notes: Optional[str] = None,
+) -> bool:
+    """Update an entry with user ownership check. Returns True if successful."""
+    # eaten_at should be ISO format string like "2026-03-27T14:30"
+    # If not provided, keep existing value
+    with get_connection() as conn:
+        # First verify ownership
+        existing = conn.execute(
+            "SELECT id FROM entries WHERE id = ? AND user_id = ?",
+            (entry_id, user_id),
+        ).fetchone()
+        if not existing:
+            return False
+
+        # Update the entry
+        conn.execute(
+            """
+            UPDATE entries
+            SET food = ?, calories = ?, eaten_at = COALESCE(?, eaten_at),
+                protein_g = ?, carbs_g = ?, fat_g = ?,
+                meal = ?, servings = ?, notes = ?
+            WHERE id = ? AND user_id = ?
+            """,
+            (
+                food.strip(),
+                calories,
+                eaten_at,
+                protein_g,
+                carbs_g,
+                fat_g,
+                meal,
+                servings,
+                notes.strip() if notes else None,
+                entry_id,
+                user_id,
+            ),
+        )
+        return True
+
+
+def delete_entry(entry_id: int, user_id: int) -> bool:
+    """Delete an entry with user ownership check. Returns True if successful."""
+    with get_connection() as conn:
+        # Verify ownership before deleting
+        existing = conn.execute(
+            "SELECT id FROM entries WHERE id = ? AND user_id = ?",
+            (entry_id, user_id),
+        ).fetchone()
+        if not existing:
+            return False
+
+        conn.execute(
+            "DELETE FROM entries WHERE id = ? AND user_id = ?",
+            (entry_id, user_id),
+        )
+        return True
 
 
 def fetch_entries_for_date(day: date, user_id: int) -> List[Entry]:
@@ -355,6 +478,205 @@ def get_calorie_goal(user_id: int) -> Optional[int]:
         return int(raw) if raw is not None else None
     except ValueError:
         return None
+
+
+def get_macro_targets(user_id: int) -> tuple[Optional[int], Optional[int], Optional[int]]:
+    """Return (protein_goal_g, carbs_goal_g, fat_goal_g) from settings."""
+    protein = get_setting("protein_goal_g", user_id)
+    carbs = get_setting("carbs_goal_g", user_id)
+    fat = get_setting("fat_goal_g", user_id)
+    try:
+        protein_int = int(protein) if protein is not None else None
+        carbs_int = int(carbs) if carbs is not None else None
+        fat_int = int(fat) if fat is not None else None
+        return (protein_int, carbs_int, fat_int)
+    except ValueError:
+        return (None, None, None)
+
+
+def set_macro_target(target_type: str, value: int, user_id: int) -> None:
+    """Set a macro target. target_type should be 'protein_goal_g', 'carbs_goal_g', or 'fat_goal_g'."""
+    set_setting(target_type, str(value), user_id)
+
+
+def add_to_search_history(query: str, user_id: int, result_count: int) -> None:
+    """Add or update a search in search history."""
+    now = datetime.now().isoformat(timespec="seconds")
+    with get_connection() as conn:
+        conn.execute(
+            """
+            INSERT INTO search_history (user_id, query, searched_at, result_count)
+            VALUES (?, ?, ?, ?)
+            ON CONFLICT(user_id, query) DO UPDATE SET searched_at = ?, result_count = ?
+            """,
+            (user_id, query.strip(), now, result_count, now, result_count),
+        )
+
+
+def get_search_history(user_id: int, limit: int = 10) -> List[dict]:
+    """Get recent searches for a user."""
+    with get_connection() as conn:
+        rows = conn.execute(
+            """
+            SELECT query, searched_at, result_count
+            FROM search_history
+            WHERE user_id = ?
+            ORDER BY searched_at DESC
+            LIMIT ?
+            """,
+            (user_id, limit),
+        ).fetchall()
+    return [dict(row) for row in rows]
+
+
+def create_meal_template(
+    name: str,
+    food: str,
+    calories: int,
+    user_id: int,
+    protein_g: Optional[float] = None,
+    carbs_g: Optional[float] = None,
+    fat_g: Optional[float] = None,
+) -> int:
+    """Create a meal template. Returns the template id."""
+    now = datetime.now().isoformat(timespec="seconds")
+    with get_connection() as conn:
+        cur = conn.execute(
+            """
+            INSERT INTO meal_templates (user_id, name, food_description, calories, protein_g, carbs_g, fat_g, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                user_id,
+                name.strip(),
+                food.strip(),
+                calories,
+                protein_g,
+                carbs_g,
+                fat_g,
+                now,
+            ),
+        )
+        return cur.lastrowid
+
+
+def get_meal_templates(user_id: int) -> List[dict]:
+    """Get all meal templates for a user."""
+    with get_connection() as conn:
+        rows = conn.execute(
+            """
+            SELECT id, name, food_description, calories, protein_g, carbs_g, fat_g, created_at
+            FROM meal_templates
+            WHERE user_id = ?
+            ORDER BY created_at DESC
+            """,
+            (user_id,),
+        ).fetchall()
+    return [dict(row) for row in rows]
+
+
+def delete_meal_template(template_id: int, user_id: int) -> bool:
+    """Delete a meal template with user ownership check. Returns True if successful."""
+    with get_connection() as conn:
+        # Verify ownership
+        existing = conn.execute(
+            "SELECT id FROM meal_templates WHERE id = ? AND user_id = ?",
+            (template_id, user_id),
+        ).fetchone()
+        if not existing:
+            return False
+
+        conn.execute(
+            "DELETE FROM meal_templates WHERE id = ? AND user_id = ?",
+            (template_id, user_id),
+        )
+        return True
+
+
+def create_entry_from_template(template_id: int, user_id: int) -> bool:
+    """Create an entry from a meal template. Returns True if successful."""
+    with get_connection() as conn:
+        template = conn.execute(
+            "SELECT food_description, calories, protein_g, carbs_g, fat_g FROM meal_templates WHERE id = ? AND user_id = ?",
+            (template_id, user_id),
+        ).fetchone()
+        if not template:
+            return False
+
+    # Create entry with current timestamp
+    add_entry(
+        food=template["food_description"],
+        calories=template["calories"],
+        user_id=user_id,
+        protein_g=template["protein_g"],
+        carbs_g=template["carbs_g"],
+        fat_g=template["fat_g"],
+    )
+    return True
+
+
+def get_week_summary(user_id: int, end_date: Optional[date] = None) -> dict:
+    """Get weekly summary (totals and averages) for a user. end_date defaults to today."""
+    if end_date is None:
+        end_date = date.today()
+
+    # Calculate week start (Monday) and end (Sunday)
+    week_start = end_date - timedelta(days=end_date.weekday())
+    week_end = week_start + timedelta(days=6)
+
+    week_start_str = week_start.isoformat()
+    week_end_str = week_end.isoformat()
+    start_time = f"{week_start_str}T00:00"
+    end_time = f"{week_end_str}T23:59"
+
+    with get_connection() as conn:
+        row = conn.execute(
+            """
+            SELECT
+                COUNT(*) as entry_count,
+                SUM(calories) as total_calories,
+                COUNT(DISTINCT DATE(eaten_at)) as days_logged,
+                SUM(COALESCE(protein_g, 0)) as total_protein_g,
+                SUM(COALESCE(carbs_g, 0)) as total_carbs_g,
+                SUM(COALESCE(fat_g, 0)) as total_fat_g,
+                AVG(CASE WHEN protein_g IS NOT NULL THEN protein_g END) as avg_protein_g,
+                AVG(CASE WHEN carbs_g IS NOT NULL THEN carbs_g END) as avg_carbs_g,
+                AVG(CASE WHEN fat_g IS NOT NULL THEN fat_g END) as avg_fat_g
+            FROM entries
+            WHERE user_id = ? AND eaten_at BETWEEN ? AND ?
+            """,
+            (user_id, start_time, end_time),
+        ).fetchone()
+
+    return {
+        "week_start": week_start,
+        "week_end": week_end,
+        "entry_count": row["entry_count"] or 0,
+        "days_logged": row["days_logged"] or 0,
+        "total_calories": row["total_calories"] or 0,
+        "avg_calories": (row["total_calories"] or 0) / (row["days_logged"] or 1),
+        "total_protein_g": row["total_protein_g"] or 0,
+        "avg_protein_g": row["avg_protein_g"],
+        "total_carbs_g": row["total_carbs_g"] or 0,
+        "avg_carbs_g": row["avg_carbs_g"],
+        "total_fat_g": row["total_fat_g"] or 0,
+        "avg_fat_g": row["avg_fat_g"],
+    }
+
+
+def get_macro_trends(user_id: int, weeks: int = 4) -> List[dict]:
+    """Get weekly summaries for past N weeks."""
+    from datetime import timedelta
+
+    today = date.today()
+    trends = []
+
+    for i in range(weeks - 1, -1, -1):
+        end_date = today - timedelta(weeks=i)
+        summary = get_week_summary(user_id, end_date)
+        trends.append(summary)
+
+    return trends
 
 
 def create_user(username: str, password: str) -> Optional[User]:

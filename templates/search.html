@@ -28,6 +28,26 @@
     </form>
   </section>
 
+  {% if recent_searches %}
+  <section class="card">
+    <div class="card-header">
+      <div>
+        <div class="card-title">Recent searches</div>
+        <div class="subtle">Quick access to previous queries</div>
+      </div>
+    </div>
+
+    <div style="display: flex; flex-wrap: wrap; gap: 6px;">
+      {% for search in recent_searches %}
+      <form method="post" action="{{ url_for('foods_search') }}" style="display: inline;">
+        <input type="hidden" name="query" value="{{ search.query }}" />
+        <button type="submit" style="padding: 6px 12px; border: 1px solid var(--accent); color: var(--accent); background: transparent; border-radius: 4px; cursor: pointer; font-size: 0.85rem;">{{ search.query }}</button>
+      </form>
+      {% endfor %}
+    </div>
+  </section>
+  {% endif %}
+
   <section class="card">
     <div class="card-header">
       <div>

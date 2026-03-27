@@ -6,12 +6,12 @@
     <div class="card-header">
       <div>
         <div class="card-title">Settings</div>
-        <div class="subtle">Set your daily calorie goal</div>
+        <div class="subtle">Set your daily goals for calories and macros</div>
       </div>
     </div>
 
     {% if saved %}
-    <p style="color: #86efac; font-size: 0.85rem; margin-bottom: 8px;">✓ Goal saved!</p>
+    <p style="color: #86efac; font-size: 0.85rem; margin-bottom: 8px;">✓ Goals saved!</p>
     {% endif %}
 
     <form method="post" action="{{ url_for('settings_save') }}">
@@ -25,11 +25,50 @@
           step="1"
           value="{{ goal if goal is not none else '' }}"
           placeholder="e.g. 2000"
-          required
         />
       </div>
+
+      <div>
+        <label for="protein_goal">Daily protein goal (g)</label>
+        <input
+          id="protein_goal"
+          name="protein_goal"
+          type="number"
+          min="1"
+          step="1"
+          value="{{ protein_goal if protein_goal is not none else '' }}"
+          placeholder="e.g. 150"
+        />
+      </div>
+
+      <div>
+        <label for="carbs_goal">Daily carbs goal (g)</label>
+        <input
+          id="carbs_goal"
+          name="carbs_goal"
+          type="number"
+          min="1"
+          step="1"
+          value="{{ carbs_goal if carbs_goal is not none else '' }}"
+          placeholder="e.g. 200"
+        />
+      </div>
+
+      <div>
+        <label for="fat_goal">Daily fat goal (g)</label>
+        <input
+          id="fat_goal"
+          name="fat_goal"
+          type="number"
+          min="1"
+          step="1"
+          value="{{ fat_goal if fat_goal is not none else '' }}"
+          placeholder="e.g. 65"
+        />
+      </div>
+
       <div class="actions">
-        <button type="submit">Save goal</button>
+        <button type="submit">Save goals</button>
       </div>
     </form>
   </section>
