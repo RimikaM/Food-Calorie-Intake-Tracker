@@ -1661,6 +1661,308 @@ def get_user_by_id(user_id: int) -> Optional[User]:
     return User(id=row["id"], username=row["username"], password_hash=row["password_hash"])
 
 
+# Feature 11: Bulk Import/Export
+
+def export_all_user_data(user_id: int, include_settings: bool = True) -> dict:
+    """Export all user data as dictionary."""
+    conn = normalize_connection(get_connection())
+    try:
+        cur = conn.cursor()
+
+        # Export entries
+        safe_execute(
+            cur,
+            """
+            SELECT food, calories, eaten_at, notes, protein_g, carbs_g, fat_g, meal
+            FROM entries
+            WHERE user_id = %s
+            ORDER BY eaten_at DESC
+            """,
+            (user_id,),
+            conn,
+        )
+        entries = []
+        for row in cur.fetchall():
+            entries.append({
+                "food": row[0],
+                "calories": row[1],
+                "date": row[2].split("T")[0] if "T" in row[2] else row[2],
+                "time": row[2].split("T")[1] if "T" in row[2] else "",
+                "notes": row[3],
+                "protein_g": row[4],
+                "carbs_g": row[5],
+                "fat_g": row[6],
+                "meal": row[7],
+            })
+
+        # Export weight logs
+        safe_execute(
+            cur,
+            "SELECT logged_at, weight_kg, notes FROM weight_logs WHERE user_id = %s ORDER BY logged_at DESC",
+            (user_id,),
+            conn,
+        )
+        weight_logs = []
+        for row in cur.fetchall():
+            weight_logs.append({
+                "date": row[0],
+                "weight_kg": row[1],
+                "notes": row[2],
+            })
+
+        # Export wellness logs
+        safe_execute(
+            cur,
+            "SELECT log_date, log_type, value, notes FROM wellness_logs WHERE user_id = %s ORDER BY log_date DESC",
+            (user_id,),
+            conn,
+        )
+        wellness_logs = []
+        for row in cur.fetchall():
+            wellness_logs.append({
+                "date": row[0],
+                "log_type": row[1],
+                "value": row[2],
+                "notes": row[3],
+            })
+
+        # Export recipes
+        safe_execute(
+            cur,
+            "SELECT id, name, description, servings FROM recipes WHERE user_id = %s",
+            (user_id,),
+            conn,
+        )
+        recipes = []
+        for recipe_row in cur.fetchall():
+            recipe_id = recipe_row[0]
+            safe_execute(
+                cur,
+                "SELECT food_name, quantity_g FROM recipe_ingredients WHERE recipe_id = %s",
+                (recipe_id,),
+                conn,
+            )
+            ingredients = [{"food": row[0], "qty_g": row[1]} for row in cur.fetchall()]
+            recipes.append({
+                "name": recipe_row[1],
+                "description": recipe_row[2],
+                "servings": recipe_row[3],
+                "ingredients": ingredients,
+            })
+
+        result = {
+            "entries": entries,
+            "weight_logs": weight_logs,
+            "wellness_logs": wellness_logs,
+            "recipes": recipes,
+        }
+
+        if include_settings:
+            safe_execute(
+                cur,
+                "SELECT key, value FROM settings WHERE user_id = %s",
+                (user_id,),
+                conn,
+            )
+            settings = {row[0]: row[1] for row in cur.fetchall()}
+            result["settings"] = settings
+
+        close_connection(conn)
+        return result
+
+    except (sqlite3.Error, psycopg2.Error) as e:
+        close_connection(conn)
+        print(f"Error exporting data: {e}")
+        return {}
+
+
+def import_entries_from_csv(user_id: int, csv_lines: List[str], overwrite: bool = False) -> tuple[int, List[str]]:
+    """
+    Import entries from CSV lines. Format: food,calories,date,time,notes,protein_g,carbs_g,fat_g,meal
+    Returns (count_imported, list_of_errors)
+    """
+    import csv
+    from io import StringIO
+
+    conn = normalize_connection(get_connection())
+    errors = []
+    count = 0
+
+    try:
+        csv_content = "\n".join(csv_lines)
+        reader = csv.DictReader(StringIO(csv_content))
+
+        if not reader.fieldnames or "food" not in reader.fieldnames or "calories" not in reader.fieldnames:
+            errors.append("Invalid CSV format. Expected columns including: food, calories")
+            close_connection(conn)
+            return count, errors
+
+        cur = conn.cursor()
+
+        for idx, row in enumerate(reader, start=2):  # Start at 2 since row 1 is headers
+            try:
+                food = (row.get("food") or "").strip()
+                calories_str = row.get("calories", "").strip()
+                date_str = (row.get("date") or "").strip()
+                time_str = (row.get("time") or "").strip()
+                notes = (row.get("notes") or "").strip() or None
+                protein_g = float(row.get("protein_g") or 0) or None
+                carbs_g = float(row.get("carbs_g") or 0) or None
+                fat_g = float(row.get("fat_g") or 0) or None
+                meal = (row.get("meal") or "").strip() or None
+
+                if not food or not calories_str:
+                    errors.append(f"Row {idx}: Missing food or calories")
+                    continue
+
+                try:
+                    calories = int(float(calories_str))
+                except ValueError:
+                    errors.append(f"Row {idx}: Invalid calories value")
+                    continue
+
+                # Parse date/time
+                if date_str:
+                    if time_str:
+                        eaten_at = f"{date_str}T{time_str}"
+                    else:
+                        eaten_at = f"{date_str}T12:00"
+                else:
+                    eaten_at = datetime.now().isoformat(timespec="minutes")
+
+                # Directly insert into database
+                safe_execute(
+                    cur,
+                    """
+                    INSERT INTO entries (user_id, eaten_at, food, calories, protein_g, carbs_g, fat_g, meal, notes)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    """,
+                    (user_id, eaten_at, food, calories, protein_g, carbs_g, fat_g, meal, notes),
+                    conn,
+                )
+                count += 1
+
+            except Exception as e:
+                errors.append(f"Row {idx}: {str(e)}")
+
+        close_connection(conn)
+        return count, errors
+
+    except Exception as e:
+        close_connection(conn)
+        errors.append(f"CSV parsing error: {str(e)}")
+        return count, errors
+
+
+def import_weight_from_csv(user_id: int, csv_lines: List[str]) -> tuple[int, List[str]]:
+    """
+    Import weight logs from CSV lines. Format: date,weight_kg,notes
+    Returns (count_imported, list_of_errors)
+    """
+    import csv
+    from io import StringIO
+
+    conn = normalize_connection(get_connection())
+    errors = []
+    count = 0
+
+    try:
+        csv_content = "\n".join(csv_lines)
+        reader = csv.DictReader(StringIO(csv_content))
+
+        if not reader.fieldnames or reader.fieldnames[0] not in ["date", "logged_at"]:
+            errors.append("Invalid CSV format. Expected columns: date, weight_kg, notes")
+            close_connection(conn)
+            return count, errors
+
+        cur = conn.cursor()
+
+        for idx, row in enumerate(reader, start=2):
+            try:
+                date_str = (row.get("date") or row.get("logged_at") or "").strip()
+                weight_str = (row.get("weight_kg") or "").strip()
+                notes = (row.get("notes") or "").strip() or None
+
+                if not date_str or not weight_str:
+                    errors.append(f"Row {idx}: Missing date or weight")
+                    continue
+
+                try:
+                    weight_kg = float(weight_str)
+                except ValueError:
+                    errors.append(f"Row {idx}: Invalid weight value")
+                    continue
+
+                add_weight_log(user_id, date_str, weight_kg, notes)
+                count += 1
+
+            except Exception as e:
+                errors.append(f"Row {idx}: {str(e)}")
+
+        close_connection(conn)
+        return count, errors
+
+    except Exception as e:
+        close_connection(conn)
+        errors.append(f"CSV parsing error: {str(e)}")
+        return count, errors
+
+
+def import_wellness_from_csv(user_id: int, csv_lines: List[str]) -> tuple[int, List[str]]:
+    """
+    Import wellness logs from CSV lines. Format: date,log_type,value,notes
+    Returns (count_imported, list_of_errors)
+    """
+    import csv
+    from io import StringIO
+
+    conn = normalize_connection(get_connection())
+    errors = []
+    count = 0
+
+    try:
+        csv_content = "\n".join(csv_lines)
+        reader = csv.DictReader(StringIO(csv_content))
+
+        if not reader.fieldnames or reader.fieldnames[0] not in ["date", "log_date"]:
+            errors.append("Invalid CSV format. Expected columns: date, log_type, value, notes")
+            close_connection(conn)
+            return count, errors
+
+        cur = conn.cursor()
+
+        for idx, row in enumerate(reader, start=2):
+            try:
+                date_str = (row.get("date") or row.get("log_date") or "").strip()
+                log_type = (row.get("log_type") or "").strip()
+                value_str = (row.get("value") or "").strip()
+                notes = (row.get("notes") or "").strip() or None
+
+                if not date_str or not log_type or not value_str:
+                    errors.append(f"Row {idx}: Missing date, log_type, or value")
+                    continue
+
+                try:
+                    value = float(value_str)
+                except ValueError:
+                    errors.append(f"Row {idx}: Invalid value")
+                    continue
+
+                add_wellness_log(user_id, date_str, log_type, value, notes)
+                count += 1
+
+            except Exception as e:
+                errors.append(f"Row {idx}: {str(e)}")
+
+        close_connection(conn)
+        return count, errors
+
+    except Exception as e:
+        close_connection(conn)
+        errors.append(f"CSV parsing error: {str(e)}")
+        return count, errors
+
+
 def verify_password(user: User, password: str) -> bool:
     return check_password_hash(user.password_hash, password)
 

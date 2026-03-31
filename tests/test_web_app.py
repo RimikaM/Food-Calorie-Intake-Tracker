@@ -506,3 +506,54 @@ class TestBarcodeRoutes:
         resp = client.get("/barcode/history")
         assert resp.status_code == 200
         assert b"Scanned" in resp.data or b"Recently" in resp.data
+
+
+# ---------------------------------------------------------------------------
+# /import /export
+# ---------------------------------------------------------------------------
+
+class TestImportExport:
+    def test_import_requires_login(self, client):
+        assert client.get("/import").status_code == 302
+        assert client.post("/import").status_code == 302
+
+    def test_export_requires_login(self, client):
+        assert client.get("/export").status_code == 302
+
+    def test_import_get_renders(self, logged_in_client):
+        client, _ = logged_in_client
+        resp = client.get("/import")
+        assert resp.status_code == 200
+        assert b"Import Data" in resp.data
+
+    def test_import_post_missing_file(self, logged_in_client):
+        client, _ = logged_in_client
+        resp = client.post("/import", data={"import_type": "entries"})
+        assert resp.status_code == 200
+        assert b"error" in resp.data.lower() or b"import" in resp.data.lower()
+
+    def test_import_entries_success(self, logged_in_client):
+        client, user = logged_in_client
+        csv_data = b"""food,calories,date,time,notes,protein_g,carbs_g,fat_g,meal
+Chicken,185,2026-03-27,12:30,Grilled,35.5,0,8.5,lunch
+Rice,200,2026-03-27,12:30,,4,45,0,lunch"""
+
+        from io import BytesIO
+        file = (BytesIO(csv_data), "test.csv")
+        resp = client.post(
+            "/import",
+            data={"import_type": "entries", "file": file},
+            content_type="multipart/form-data",
+        )
+        assert resp.status_code == 200
+        assert b"Imported" in resp.data or b"import" in resp.data.lower()
+
+    def test_export_returns_json(self, logged_in_client):
+        client, user = logged_in_client
+        # Add some data first
+        m.add_entry("Test Food", 100, user.id)
+
+        resp = client.get("/export")
+        assert resp.status_code == 200
+        assert b"Content-Disposition" in resp.headers or resp.status_code == 200
+

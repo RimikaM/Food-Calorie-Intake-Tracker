@@ -63,6 +63,10 @@ from main import (
     lookup_barcode,
     add_barcode_mapping,
     get_barcode_history,
+    export_all_user_data,
+    import_entries_from_csv,
+    import_weight_from_csv,
+    import_wellness_from_csv,
 )
 from usda_api import UsdaFood, UsdaSearchResponse, search_foods, search_foods_by_barcode
 
@@ -904,6 +908,80 @@ def barcode_history():
     """Show recently scanned barcodes."""
     history = get_barcode_history(current_user.id, limit=20)
     return render_template("barcode_history.html", history=history)
+
+
+# Feature 11: Bulk Import/Export
+
+@app.route("/import", methods=["GET", "POST"])
+@login_required
+def import_data():
+    """Import data from CSV file."""
+    if request.method == "GET":
+        return render_template("import.html")
+
+    # Handle POST
+    import_type = request.form.get("import_type", "entries").strip()
+
+    if "file" not in request.files:
+        flash("No file uploaded", "error")
+        return render_template("import.html")
+
+    file = request.files["file"]
+    if file.filename == "":
+        flash("No file selected", "error")
+        return render_template("import.html")
+
+    try:
+        # Read file content
+        content = file.read().decode("utf-8")
+        lines = [line.strip() for line in content.split("\n") if line.strip()]
+
+        if not lines:
+            flash("CSV file is empty", "error")
+            return render_template("import.html")
+
+        count, errors = 0, []
+
+        if import_type == "entries":
+            count, errors = import_entries_from_csv(current_user.id, lines)
+        elif import_type == "weight":
+            count, errors = import_weight_from_csv(current_user.id, lines)
+        elif import_type == "wellness":
+            count, errors = import_wellness_from_csv(current_user.id, lines)
+        else:
+            flash("Invalid import type", "error")
+            return render_template("import.html")
+
+        if count > 0:
+            flash(f"Imported {count} records successfully!", "success")
+        if errors:
+            error_msg = "; ".join(errors[:5])
+            if len(errors) > 5:
+                error_msg += f"; ... and {len(errors) - 5} more errors"
+            flash(f"Errors: {error_msg}", "warning")
+
+        return render_template("import.html", result={"count": count, "errors": errors})
+
+    except Exception as e:
+        flash(f"Import failed: {str(e)}", "error")
+        return render_template("import.html")
+
+
+@app.route("/export")
+@login_required
+def export_data():
+    """Export user data as JSON."""
+    data = export_all_user_data(current_user.id)
+
+    if not data:
+        flash("No data to export", "error")
+        return redirect(url_for("index"))
+
+    import json
+    response = make_response(json.dumps(data, indent=2))
+    response.headers["Content-Disposition"] = f"attachment;filename=food_tracker_export_{date.today()}.json"
+    response.headers["Content-Type"] = "application/json"
+    return response
 
 
 if __name__ == "__main__":

@@ -438,3 +438,74 @@ class TestBarcodeScanning:
 
         history = m.get_barcode_history(user.id, limit=3)
         assert len(history) == 3
+
+
+class TestBulkImportExport:
+    def test_export_all_user_data_empty(self, user):
+        """Test export with no data."""
+        result = m.export_all_user_data(user.id)
+        assert result["entries"] == []
+        assert result["weight_logs"] == []
+        assert result["wellness_logs"] == []
+        assert result["recipes"] == []
+
+    def test_export_includes_settings(self, user):
+        """Test export includes settings when requested."""
+        m.set_setting("calorie_goal", "2000", user_id=user.id)
+        result = m.export_all_user_data(user.id, include_settings=True)
+        assert "settings" in result
+        assert result["settings"]["calorie_goal"] == "2000"
+
+    def test_import_entries_from_csv(self, user):
+        """Test importing entries from CSV."""
+        csv_lines = [
+            "food,calories,date,time,notes,protein_g,carbs_g,fat_g,meal",
+            "Chicken,185,2026-03-27,12:30,Grilled,35.5,0,8.5,lunch",
+            "Rice,200,2026-03-27,12:30,,4,45,0,lunch",
+        ]
+        count, errors = m.import_entries_from_csv(user.id, csv_lines)
+        assert count == 2
+        assert len(errors) == 0
+
+    def test_import_entries_invalid_csv(self, user):
+        """Test importing with invalid CSV."""
+        csv_lines = [
+            "invalid,header,format",
+            "data,here",
+        ]
+        count, errors = m.import_entries_from_csv(user.id, csv_lines)
+        assert count == 0
+        assert len(errors) > 0
+
+    def test_import_entries_missing_required(self, user):
+        """Test importing entries with missing required fields."""
+        csv_lines = [
+            "food,calories,date,time,notes,protein_g,carbs_g,fat_g,meal",
+            "Chicken,,2026-03-27,12:30,,,,,",
+        ]
+        count, errors = m.import_entries_from_csv(user.id, csv_lines)
+        assert count == 0
+        assert any("Missing" in err or "Invalid" in err for err in errors)
+
+    def test_import_weight_from_csv(self, user):
+        """Test importing weight logs from CSV."""
+        csv_lines = [
+            "date,weight_kg,notes",
+            "2026-03-27,72.5,Morning",
+            "2026-03-28,72.3,Morning",
+        ]
+        count, errors = m.import_weight_from_csv(user.id, csv_lines)
+        assert count == 2
+        assert len(errors) == 0
+
+    def test_import_wellness_from_csv(self, user):
+        """Test importing wellness logs from CSV."""
+        csv_lines = [
+            "date,log_type,value,notes",
+            "2026-03-27,water_ml,2000,Eight glasses",
+            "2026-03-27,caffeine_mg,200,Two coffees",
+        ]
+        count, errors = m.import_wellness_from_csv(user.id, csv_lines)
+        assert count == 2
+        assert len(errors) == 0
+

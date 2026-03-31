@@ -1,0 +1,100 @@
+{% extends "base.html" %}
+
+{% block body %}
+<main>
+  <section class="card">
+    <div class="card-header">
+      <h2>Import Data</h2>
+      <p class="subtitle">Bulk import data from CSV files</p>
+    </div>
+
+    <!-- Messages -->
+    {% with messages = get_flashed_messages(with_categories=true) %}
+      {% if messages %}
+        {% for category, message in messages %}
+        <div style="background: {% if category == 'success' %}#efe{% elif category == 'error' %}#fee{% else %}#ffd{% endif %}; color: {% if category == 'success' %}#060{% elif category == 'error' %}#c00{% else %}#660{% endif %}; padding: 12px; border-radius: 4px; margin-bottom: 16px;">
+          {{ message }}
+        </div>
+        {% endfor %}
+      {% endif %}
+    {% endwith %}
+
+    <!-- Import Form -->
+    <form method="post" enctype="multipart/form-data" style="background: var(--muted); padding: 24px; border-radius: 4px;">
+      <div style="margin-bottom: 16px;">
+        <label for="import_type">Data Type *</label>
+        <select id="import_type" name="import_type" required style="width: 100%; padding: 8px;">
+          <option value="entries">Food Entries</option>
+          <option value="weight">Weight Logs</option>
+          <option value="wellness">Wellness Logs (Water, etc.)</option>
+        </select>
+        <div id="format_help" style="font-size: 12px; color: var(--muted); margin-top: 8px;"></div>
+      </div>
+
+      <div style="margin-bottom: 16px;">
+        <label for="file">CSV File *</label>
+        <input type="file" id="file" name="file" accept=".csv" required>
+        <div style="font-size: 12px; color: var(--muted); margin-top: 4px;">Maximum 10MB</div>
+      </div>
+
+      <div style="margin-bottom: 16px;">
+        <button type="submit" class="button" style="width: 100%;">Import</button>
+      </div>
+    </form>
+
+    <!-- Format Examples -->
+    <div style="margin-top: 24px;">
+      <h3>CSV Format Examples</h3>
+
+      <div style="margin: 16px 0;">
+        <h4 style="margin-bottom: 8px;">📘 Food Entries</h4>
+        <code style="background: var(--muted); padding: 12px; border-radius: 4px; display: block; font-size: 11px; overflow-x: auto;">
+food,calories,date,time,notes,protein_g,carbs_g,fat_g,meal<br/>
+Chicken Breast,185,2026-03-27,12:30,Grilled,35.5,0,8.5,lunch<br/>
+Rice,200,2026-03-27,12:30,,4,45,0,lunch
+        </code>
+      </div>
+
+      <div style="margin: 16px 0;">
+        <h4 style="margin-bottom: 8px;">⚖️ Weight Logs</h4>
+        <code style="background: var(--muted); padding: 12px; border-radius: 4px; display: block; font-size: 11px; overflow-x: auto;">
+date,weight_kg,notes<br/>
+2026-03-27,72.5,Morning<br/>
+2026-03-28,72.3,Morning
+        </code>
+      </div>
+
+      <div style="margin: 16px 0;">
+        <h4 style="margin-bottom: 8px;">💧 Wellness Logs</h4>
+        <code style="background: var(--muted); padding: 12px; border-radius: 4px; display: block; font-size: 11px; overflow-x: auto;">
+date,log_type,value,notes<br/>
+2026-03-27,water_ml,2000,Eight glasses<br/>
+2026-03-27,caffeine_mg,200,Two coffees
+        </code>
+      </div>
+    </div>
+
+    <!-- Export Link -->
+    <div style="margin-top: 24px; padding: 16px; background: #eef; border-radius: 4px;">
+      <p style="margin: 0 0 8px 0;">Need to export your data?</p>
+      <a href="{{ url_for('export_data') }}" class="button button-secondary">Export as JSON</a>
+    </div>
+
+  </section>
+</main>
+
+<script>
+// Update format help based on selected type
+document.getElementById('import_type').addEventListener('change', (e) => {
+  const helpText = {
+    entries: 'Columns: food, calories, date (YYYY-MM-DD), time (HH:MM), notes, protein_g, carbs_g, fat_g, meal',
+    weight: 'Columns: date (YYYY-MM-DD), weight_kg, notes',
+    wellness: 'Columns: date (YYYY-MM-DD), log_type (e.g., water_ml, caffeine_mg), value, notes'
+  };
+  document.getElementById('format_help').textContent = helpText[e.target.value] || '';
+});
+
+// Trigger on load
+document.getElementById('import_type').dispatchEvent(new Event('change'));
+</script>
+{% endblock %}
