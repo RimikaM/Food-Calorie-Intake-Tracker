@@ -1,13 +1,13 @@
+import os
 import sqlite3
+import psycopg2
+import psycopg2.extras
 from dataclasses import dataclass
-from datetime import datetime, date
+from datetime import datetime, date, timedelta
 from pathlib import Path
 from typing import List, Optional
 
 from werkzeug.security import generate_password_hash, check_password_hash
-
-
-DB_PATH = Path(__file__).with_name("calories.db")
 
 
 @dataclass
@@ -43,24 +43,126 @@ class User:
     password_hash: str
 
 
-def get_connection() -> sqlite3.Connection:
-    conn = sqlite3.connect(DB_PATH)
-    conn.row_factory = sqlite3.Row
+class SqliteCursor:
+    """Wrapper for SQLite cursor to handle placeholder conversion."""
+
+    def __init__(self, cursor):
+        self._cursor = cursor
+
+    def execute(self, sql, params=None):
+        # Convert %s to ? for SQLite
+        sql = sql.replace("%s", "?")
+        # Handle RETURNING clause (PostgreSQL) - just remove it for SQLite
+        if " RETURNING " in sql:
+            sql = sql.split(" RETURNING ")[0]
+        if params is None:
+            return self._cursor.execute(sql)
+        return self._cursor.execute(sql, params)
+
+    def fetchone(self):
+        return self._cursor.fetchone()
+
+    def fetchall(self):
+        return self._cursor.fetchall()
+
+    def commit(self):
+        return self._cursor.commit()
+
+    @property
+    def lastrowid(self):
+        return self._cursor.lastrowid
+
+    def __getattr__(self, name):
+        return getattr(self._cursor, name)
+
+
+def safe_execute(cursor, sql, params, conn):
+    """Execute SQL with automatic placeholder conversion for raw SQLite connections (like in tests)."""
+    # If it's a raw sqlite3.Connection (from test monkeypatch), convert placeholders
+    if isinstance(conn, sqlite3.Connection) and not isinstance(conn, SqliteConnection):
+        sql = sql.replace("%s", "?")
+        if " RETURNING " in sql:
+            sql = sql.split(" RETURNING ")[0]
+    cursor.execute(sql, params if params else ())
+
+
+
+class SqliteConnection:
+    """Wrapper for SQLite connection to handle placeholder conversion automatically."""
+
+    def __init__(self, conn):
+        self._conn = conn
+        self.is_sqlite = True
+
+    def cursor(self, *args, **kwargs):
+        cur = self._conn.cursor(*args, **kwargs)
+        return SqliteCursor(cur)
+
+    def commit(self):
+        return self._conn.commit()
+
+    def close(self):
+        return self._conn.close()
+
+    def __getattr__(self, name):
+        return getattr(self._conn, name)
+
+
+def get_connection():
+    """Get a database connection. Uses PostgreSQL for production (Railway), SQLite for local development."""
+    db_url = os.getenv("DATABASE_URL")
+
+    if db_url:
+        # Railway production: use PostgreSQL
+        if db_url.startswith("postgres://"):
+            db_url = db_url.replace("postgres://", "postgresql://")
+        conn = psycopg2.connect(db_url)
+        conn.cursor_factory = psycopg2.extras.RealDictCursor
+        conn.is_sqlite = False
+        return conn
+    else:
+        # Local development: use SQLite
+        db_path = Path(__file__).with_name("calories.db")
+        conn = sqlite3.connect(db_path)
+        conn.row_factory = sqlite3.Row
+        return SqliteConnection(conn)
+
+
+def normalize_connection(conn):
+    """Ensure connection is properly wrapped for placeholder conversion."""
+    # If it's a raw sqlite3.Connection (not wrapped), wrap it now
+    if isinstance(conn, sqlite3.Connection) and not isinstance(conn, SqliteConnection):
+        # Wrap the raw connection - likely from test monkeypatch
+        wrapped = SqliteConnection.__new__(SqliteConnection)
+        wrapped._conn = conn
+        wrapped.is_sqlite = True
+        wrapped.is_test = True  # Mark as borrowed from test - don't auto-close
+        return wrapped
     return conn
 
 
+def close_connection(conn):
+    """Close connection only if it's not a borrowed test connection."""
+    if isinstance(conn, SqliteConnection):
+        if not getattr(conn, 'is_test', False):
+            conn._conn.close()
+    else:
+        # Direct PostgreSQL connection
+        conn.close()
+
+
 def init_db() -> None:
-    with get_connection() as conn:
-        conn.execute(
+    conn = normalize_connection(get_connection())
+    try:
+        # Create tables - use compatible syntax for both SQLite and PostgreSQL
+        table_definitions = [
             """
             CREATE TABLE IF NOT EXISTS users (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 username TEXT UNIQUE NOT NULL,
                 password_hash TEXT NOT NULL
             );
-            """
-        )
-        conn.execute(
+            """,
             """
             CREATE TABLE IF NOT EXISTS entries (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -75,9 +177,7 @@ def init_db() -> None:
                 servings REAL,
                 notes TEXT
             );
-            """
-        )
-        conn.execute(
+            """,
             """
             CREATE TABLE IF NOT EXISTS foods (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -89,9 +189,7 @@ def init_db() -> None:
                 carbs_g REAL,
                 fat_g REAL
             );
-            """
-        )
-        conn.execute(
+            """,
             """
             CREATE TABLE IF NOT EXISTS settings (
                 user_id INTEGER NOT NULL REFERENCES users(id),
@@ -99,9 +197,7 @@ def init_db() -> None:
                 value TEXT NOT NULL,
                 PRIMARY KEY (user_id, key)
             );
-            """
-        )
-        conn.execute(
+            """,
             """
             CREATE TABLE IF NOT EXISTS search_history (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -111,9 +207,7 @@ def init_db() -> None:
                 result_count INTEGER,
                 UNIQUE(user_id, query)
             );
-            """
-        )
-        conn.execute(
+            """,
             """
             CREATE TABLE IF NOT EXISTS meal_templates (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -126,56 +220,43 @@ def init_db() -> None:
                 fat_g REAL,
                 created_at TEXT NOT NULL
             );
+            """,
             """
-        )
-        # Best-effort migrations for pre-existing DBs.
-        for column_sql in (
-            "protein_g REAL",
-            "carbs_g REAL",
-            "fat_g REAL",
-            "meal TEXT",
-            "servings REAL",
-        ):
+            CREATE TABLE IF NOT EXISTS weight_logs (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL REFERENCES users(id),
+                logged_at TEXT NOT NULL,
+                weight_kg REAL NOT NULL,
+                notes TEXT,
+                UNIQUE(user_id, logged_at)
+            );
+            """,
+            """
+            CREATE TABLE IF NOT EXISTS wellness_logs (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL REFERENCES users(id),
+                log_date TEXT NOT NULL,
+                log_type TEXT NOT NULL,
+                value REAL NOT NULL,
+                notes TEXT,
+                UNIQUE(user_id, log_date, log_type)
+            );
+            """,
+        ]
+
+        cur = conn.cursor()
+        for sql in table_definitions:
             try:
-                conn.execute(f"ALTER TABLE entries ADD COLUMN {column_sql}")
-            except sqlite3.OperationalError:
+                cur.execute(sql)
+            except (sqlite3.OperationalError, psycopg2.errors.DuplicateTable):
+                # Table already exists, ignore
                 pass
-        try:
-            conn.execute("ALTER TABLE entries ADD COLUMN user_id INTEGER")
-        except sqlite3.OperationalError:
-            pass
-        try:
-            conn.execute("ALTER TABLE settings ADD COLUMN user_id INTEGER")
-        except sqlite3.OperationalError:
-            pass
-        # If settings table still has the old single-column PK (key TEXT PRIMARY KEY),
-        # migrate it to the composite (user_id, key) PK required by ON CONFLICT upserts.
-        old_schema = conn.execute(
-            "SELECT sql FROM sqlite_master WHERE type='table' AND name='settings'"
-        ).fetchone()
-        if old_schema and "user_id" not in old_schema["sql"].split("PRIMARY KEY")[0].strip().upper().split()[-1:][0] if old_schema["sql"] else False:
-            pass  # already composite
-        try:
-            # Detect old schema: PRIMARY KEY is just (key), not (user_id, key)
-            pk_info = conn.execute("PRAGMA table_info(settings)").fetchall()
-            pk_cols = [row["name"] for row in pk_info if row["pk"] > 0]
-            if pk_cols == ["key"]:
-                conn.execute("""
-                    CREATE TABLE IF NOT EXISTS settings_migration (
-                        user_id INTEGER NOT NULL,
-                        key TEXT NOT NULL,
-                        value TEXT NOT NULL,
-                        PRIMARY KEY (user_id, key)
-                    )
-                """)
-                conn.execute("""
-                    INSERT OR IGNORE INTO settings_migration (user_id, key, value)
-                    SELECT user_id, key, value FROM settings WHERE user_id IS NOT NULL
-                """)
-                conn.execute("DROP TABLE settings")
-                conn.execute("ALTER TABLE settings_migration RENAME TO settings")
-        except sqlite3.OperationalError:
-            pass
+
+        conn.commit()
+    finally:
+        # Only close if it's a wrapped SqliteConnection and not borrowed from tests
+        if isinstance(conn, SqliteConnection) and not getattr(conn, 'is_test', False):
+            close_connection(conn)
 
 
 def add_entry(
@@ -190,11 +271,13 @@ def add_entry(
     servings: Optional[float] = None,
 ) -> None:
     now = datetime.now().isoformat(timespec="minutes")
-    with get_connection() as conn:
-        conn.execute(
+    conn = normalize_connection(get_connection())
+    try:
+        cur = conn.cursor()
+        cur.execute(
             """
             INSERT INTO entries (user_id, eaten_at, food, calories, protein_g, carbs_g, fat_g, meal, servings, notes)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             """,
             (
                 user_id,
@@ -209,19 +292,27 @@ def add_entry(
                 notes.strip() if notes else None,
             ),
         )
+        conn.commit()
+    finally:
+        close_connection(conn)
 
 
 def get_entry_by_id(entry_id: int, user_id: int) -> Optional[Entry]:
     """Fetch a single entry by ID, with user ownership check."""
-    with get_connection() as conn:
-        row = conn.execute(
+    conn = normalize_connection(get_connection())
+    try:
+        cur = conn.cursor()
+        cur.execute(
             """
             SELECT id, eaten_at, food, calories, protein_g, carbs_g, fat_g, meal, servings, notes
             FROM entries
-            WHERE id = ? AND user_id = ?
+            WHERE id = %s AND user_id = %s
             """,
             (entry_id, user_id),
-        ).fetchone()
+        )
+        row = cur.fetchone()
+    finally:
+        close_connection(conn)
     if not row:
         return None
     return Entry(
@@ -254,23 +345,26 @@ def update_entry(
     """Update an entry with user ownership check. Returns True if successful."""
     # eaten_at should be ISO format string like "2026-03-27T14:30"
     # If not provided, keep existing value
-    with get_connection() as conn:
+    conn = normalize_connection(get_connection())
+    try:
+        cur = conn.cursor()
         # First verify ownership
-        existing = conn.execute(
-            "SELECT id FROM entries WHERE id = ? AND user_id = ?",
+        cur.execute(
+            "SELECT id FROM entries WHERE id = %s AND user_id = %s",
             (entry_id, user_id),
-        ).fetchone()
+        )
+        existing = cur.fetchone()
         if not existing:
             return False
 
         # Update the entry
-        conn.execute(
+        cur.execute(
             """
             UPDATE entries
-            SET food = ?, calories = ?, eaten_at = COALESCE(?, eaten_at),
-                protein_g = ?, carbs_g = ?, fat_g = ?,
-                meal = ?, servings = ?, notes = ?
-            WHERE id = ? AND user_id = ?
+            SET food = %s, calories = %s, eaten_at = COALESCE(%s, eaten_at),
+                protein_g = %s, carbs_g = %s, fat_g = %s,
+                meal = %s, servings = %s, notes = %s
+            WHERE id = %s AND user_id = %s
             """,
             (
                 food.strip(),
@@ -286,41 +380,55 @@ def update_entry(
                 user_id,
             ),
         )
+        conn.commit()
         return True
+    finally:
+        close_connection(conn)
 
 
 def delete_entry(entry_id: int, user_id: int) -> bool:
     """Delete an entry with user ownership check. Returns True if successful."""
-    with get_connection() as conn:
+    conn = normalize_connection(get_connection())
+    try:
+        cur = conn.cursor()
         # Verify ownership before deleting
-        existing = conn.execute(
-            "SELECT id FROM entries WHERE id = ? AND user_id = ?",
+        cur.execute(
+            "SELECT id FROM entries WHERE id = %s AND user_id = %s",
             (entry_id, user_id),
-        ).fetchone()
+        )
+        existing = cur.fetchone()
         if not existing:
             return False
 
-        conn.execute(
-            "DELETE FROM entries WHERE id = ? AND user_id = ?",
+        cur.execute(
+            "DELETE FROM entries WHERE id = %s AND user_id = %s",
             (entry_id, user_id),
         )
+        conn.commit()
         return True
+    finally:
+        close_connection(conn)
 
 
 def fetch_entries_for_date(day: date, user_id: int) -> List[Entry]:
     day_str = day.isoformat()
     start = f"{day_str}T00:00"
     end = f"{day_str}T23:59"
-    with get_connection() as conn:
-        rows = conn.execute(
+    conn = normalize_connection(get_connection())
+    try:
+        cur = conn.cursor()
+        cur.execute(
             """
             SELECT id, eaten_at, food, calories, protein_g, carbs_g, fat_g, meal, servings, notes
             FROM entries
-            WHERE user_id = ? AND eaten_at BETWEEN ? AND ?
+            WHERE user_id = %s AND eaten_at BETWEEN %s AND %s
             ORDER BY eaten_at ASC
             """,
             (user_id, start, end),
-        ).fetchall()
+        )
+        rows = cur.fetchall()
+    finally:
+        close_connection(conn)
     entries: List[Entry] = []
     for r in rows:
         entries.append(
@@ -342,16 +450,21 @@ def fetch_entries_for_date(day: date, user_id: int) -> List[Entry]:
 
 def fetch_all_entries(user_id: int) -> list[Entry]:
     """Return all logged entries for a user, newest first."""
-    with get_connection() as conn:
-        rows = conn.execute(
+    conn = normalize_connection(get_connection())
+    try:
+        cur = conn.cursor()
+        cur.execute(
             """
             SELECT id, eaten_at, food, calories, protein_g, carbs_g, fat_g, meal, servings, notes
             FROM entries
-            WHERE user_id = ?
+            WHERE user_id = %s
             ORDER BY eaten_at DESC
             """,
             (user_id,),
-        ).fetchall()
+        )
+        rows = cur.fetchall()
+    finally:
+        close_connection(conn)
     entries: list[Entry] = []
     for r in rows:
         entries.append(
@@ -372,20 +485,25 @@ def fetch_all_entries(user_id: int) -> list[Entry]:
 
 
 def fetch_recent_days(user_id: int, limit: int = 7):
-    with get_connection() as conn:
-        rows = conn.execute(
+    conn = normalize_connection(get_connection())
+    try:
+        cur = conn.cursor()
+        cur.execute(
             """
-            SELECT substr(eaten_at, 1, 10) as day,
+            SELECT substring(eaten_at, 1, 10) as day,
                    SUM(calories) as total_calories,
                    COUNT(*) as items
             FROM entries
-            WHERE user_id = ?
+            WHERE user_id = %s
             GROUP BY day
             ORDER BY day DESC
-            LIMIT ?
+            LIMIT %s
             """,
             (user_id, limit),
-        ).fetchall()
+        )
+        rows = cur.fetchall()
+    finally:
+        close_connection(conn)
     return rows
 
 
@@ -398,11 +516,14 @@ def get_or_create_food(
     carbs_g: Optional[float],
     fat_g: Optional[float],
 ) -> Food:
-    with get_connection() as conn:
-        row = conn.execute(
-            "SELECT id, fdc_id, description, brand, calories, protein_g, carbs_g, fat_g FROM foods WHERE fdc_id = ?",
+    conn = normalize_connection(get_connection())
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT id, fdc_id, description, brand, calories, protein_g, carbs_g, fat_g FROM foods WHERE fdc_id = %s",
             (fdc_id,),
-        ).fetchone()
+        )
+        row = cur.fetchone()
         if row:
             return Food(
                 id=row["id"],
@@ -415,14 +536,25 @@ def get_or_create_food(
                 fat_g=row["fat_g"],
             )
 
-        cur = conn.execute(
+        # Insert food - handle SQLite vs PostgreSQL
+        cur.execute(
             """
             INSERT INTO foods (fdc_id, description, brand, calories, protein_g, carbs_g, fat_g)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
+            VALUES (%s, %s, %s, %s, %s, %s, %s)
+            RETURNING id
             """,
             (fdc_id, description, brand, calories, protein_g, carbs_g, fat_g),
         )
-        new_id = cur.lastrowid
+
+        if conn.is_sqlite:
+            # SQLite: fetch lastrowid after insert (RETURNING was stripped)
+            new_id = cur.lastrowid
+        else:
+            # PostgreSQL: fetch from RETURNING
+            result = cur.fetchone()
+            new_id = result["id"]
+
+        conn.commit()
         return Food(
             id=new_id,
             fdc_id=fdc_id,
@@ -433,14 +565,19 @@ def get_or_create_food(
             carbs_g=carbs_g,
             fat_g=fat_g,
         )
+    finally:
+        close_connection(conn)
 
 
 def get_food_by_id(food_id: int) -> Optional[Food]:
-    with get_connection() as conn:
-        row = conn.execute(
-            "SELECT id, fdc_id, description, brand, calories, protein_g, carbs_g, fat_g FROM foods WHERE id = ?",
+    conn = normalize_connection(get_connection())
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT id, fdc_id, description, brand, calories, protein_g, carbs_g, fat_g FROM foods WHERE id = %s",
             (food_id,),
-        ).fetchone()
+        )
+        row = cur.fetchone()
         if not row:
             return None
         return Food(
@@ -453,23 +590,37 @@ def get_food_by_id(food_id: int) -> Optional[Food]:
             carbs_g=row["carbs_g"],
             fat_g=row["fat_g"],
         )
+    finally:
+        close_connection(conn)
 
 
 def get_setting(key: str, user_id: int, default: Optional[str] = None) -> Optional[str]:
-    with get_connection() as conn:
-        row = conn.execute(
-            "SELECT value FROM settings WHERE user_id = ? AND key = ?", (user_id, key)
-        ).fetchone()
+    conn = normalize_connection(get_connection())
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT value FROM settings WHERE user_id = %s AND key = %s", (user_id, key)
+        )
+        row = cur.fetchone()
+    finally:
+        close_connection(conn)
     return row["value"] if row else default
 
 
 def set_setting(key: str, value: str, user_id: int) -> None:
-    with get_connection() as conn:
-        conn.execute(
-            "INSERT INTO settings (user_id, key, value) VALUES (?, ?, ?) "
-            "ON CONFLICT(user_id, key) DO UPDATE SET value = excluded.value",
+    conn = normalize_connection(get_connection())
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            INSERT INTO settings (user_id, key, value) VALUES (%s, %s, %s)
+            ON CONFLICT(user_id, key) DO UPDATE SET value = EXCLUDED.value
+            """,
             (user_id, key, value),
         )
+        conn.commit()
+    finally:
+        close_connection(conn)
 
 
 def get_calorie_goal(user_id: int) -> Optional[int]:
@@ -502,30 +653,40 @@ def set_macro_target(target_type: str, value: int, user_id: int) -> None:
 def add_to_search_history(query: str, user_id: int, result_count: int) -> None:
     """Add or update a search in search history."""
     now = datetime.now().isoformat(timespec="seconds")
-    with get_connection() as conn:
-        conn.execute(
+    conn = normalize_connection(get_connection())
+    try:
+        cur = conn.cursor()
+        cur.execute(
             """
             INSERT INTO search_history (user_id, query, searched_at, result_count)
-            VALUES (?, ?, ?, ?)
-            ON CONFLICT(user_id, query) DO UPDATE SET searched_at = ?, result_count = ?
+            VALUES (%s, %s, %s, %s)
+            ON CONFLICT(user_id, query) DO UPDATE SET searched_at = EXCLUDED.searched_at, result_count = EXCLUDED.result_count
             """,
-            (user_id, query.strip(), now, result_count, now, result_count),
+            (user_id, query.strip(), now, result_count),
         )
+        conn.commit()
+    finally:
+        close_connection(conn)
 
 
 def get_search_history(user_id: int, limit: int = 10) -> List[dict]:
     """Get recent searches for a user."""
-    with get_connection() as conn:
-        rows = conn.execute(
+    conn = normalize_connection(get_connection())
+    try:
+        cur = conn.cursor()
+        cur.execute(
             """
             SELECT query, searched_at, result_count
             FROM search_history
-            WHERE user_id = ?
+            WHERE user_id = %s
             ORDER BY searched_at DESC
-            LIMIT ?
+            LIMIT %s
             """,
             (user_id, limit),
-        ).fetchall()
+        )
+        rows = cur.fetchall()
+    finally:
+        close_connection(conn)
     return [dict(row) for row in rows]
 
 
@@ -540,11 +701,14 @@ def create_meal_template(
 ) -> int:
     """Create a meal template. Returns the template id."""
     now = datetime.now().isoformat(timespec="seconds")
-    with get_connection() as conn:
-        cur = conn.execute(
+    conn = normalize_connection(get_connection())
+    try:
+        cur = conn.cursor()
+        cur.execute(
             """
             INSERT INTO meal_templates (user_id, name, food_description, calories, protein_g, carbs_g, fat_g, created_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+            RETURNING id
             """,
             (
                 user_id,
@@ -557,51 +721,72 @@ def create_meal_template(
                 now,
             ),
         )
-        return cur.lastrowid
+        result = cur.fetchone()
+        new_id = result["id"]
+        conn.commit()
+        return new_id
+    finally:
+        close_connection(conn)
 
 
 def get_meal_templates(user_id: int) -> List[dict]:
     """Get all meal templates for a user."""
-    with get_connection() as conn:
-        rows = conn.execute(
+    conn = normalize_connection(get_connection())
+    try:
+        cur = conn.cursor()
+        cur.execute(
             """
             SELECT id, name, food_description, calories, protein_g, carbs_g, fat_g, created_at
             FROM meal_templates
-            WHERE user_id = ?
+            WHERE user_id = %s
             ORDER BY created_at DESC
             """,
             (user_id,),
-        ).fetchall()
+        )
+        rows = cur.fetchall()
+    finally:
+        close_connection(conn)
     return [dict(row) for row in rows]
 
 
 def delete_meal_template(template_id: int, user_id: int) -> bool:
     """Delete a meal template with user ownership check. Returns True if successful."""
-    with get_connection() as conn:
+    conn = normalize_connection(get_connection())
+    try:
+        cur = conn.cursor()
         # Verify ownership
-        existing = conn.execute(
-            "SELECT id FROM meal_templates WHERE id = ? AND user_id = ?",
+        cur.execute(
+            "SELECT id FROM meal_templates WHERE id = %s AND user_id = %s",
             (template_id, user_id),
-        ).fetchone()
+        )
+        existing = cur.fetchone()
         if not existing:
             return False
 
-        conn.execute(
-            "DELETE FROM meal_templates WHERE id = ? AND user_id = ?",
+        cur.execute(
+            "DELETE FROM meal_templates WHERE id = %s AND user_id = %s",
             (template_id, user_id),
         )
+        conn.commit()
         return True
+    finally:
+        close_connection(conn)
 
 
 def create_entry_from_template(template_id: int, user_id: int) -> bool:
     """Create an entry from a meal template. Returns True if successful."""
-    with get_connection() as conn:
-        template = conn.execute(
-            "SELECT food_description, calories, protein_g, carbs_g, fat_g FROM meal_templates WHERE id = ? AND user_id = ?",
+    conn = normalize_connection(get_connection())
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT food_description, calories, protein_g, carbs_g, fat_g FROM meal_templates WHERE id = %s AND user_id = %s",
             (template_id, user_id),
-        ).fetchone()
+        )
+        template = cur.fetchone()
         if not template:
             return False
+    finally:
+        close_connection(conn)
 
     # Create entry with current timestamp
     add_entry(
@@ -629,13 +814,15 @@ def get_week_summary(user_id: int, end_date: Optional[date] = None) -> dict:
     start_time = f"{week_start_str}T00:00"
     end_time = f"{week_end_str}T23:59"
 
-    with get_connection() as conn:
-        row = conn.execute(
+    conn = normalize_connection(get_connection())
+    try:
+        cur = conn.cursor()
+        cur.execute(
             """
             SELECT
                 COUNT(*) as entry_count,
                 SUM(calories) as total_calories,
-                COUNT(DISTINCT DATE(eaten_at)) as days_logged,
+                COUNT(DISTINCT DATE(eaten_at::timestamp)) as days_logged,
                 SUM(COALESCE(protein_g, 0)) as total_protein_g,
                 SUM(COALESCE(carbs_g, 0)) as total_carbs_g,
                 SUM(COALESCE(fat_g, 0)) as total_fat_g,
@@ -643,10 +830,13 @@ def get_week_summary(user_id: int, end_date: Optional[date] = None) -> dict:
                 AVG(CASE WHEN carbs_g IS NOT NULL THEN carbs_g END) as avg_carbs_g,
                 AVG(CASE WHEN fat_g IS NOT NULL THEN fat_g END) as avg_fat_g
             FROM entries
-            WHERE user_id = ? AND eaten_at BETWEEN ? AND ?
+            WHERE user_id = %s AND eaten_at BETWEEN %s AND %s
             """,
             (user_id, start_time, end_time),
-        ).fetchone()
+        )
+        row = cur.fetchone()
+    finally:
+        close_connection(conn)
 
     return {
         "week_start": week_start,
@@ -679,37 +869,222 @@ def get_macro_trends(user_id: int, weeks: int = 4) -> List[dict]:
     return trends
 
 
+def get_top_favorite_foods(user_id: int, limit: int = 10) -> List[dict]:
+    """Get most frequently logged foods for a user. Returns list of dicts with food name, times_logged, and avg_calories."""
+    conn = normalize_connection(get_connection())
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            SELECT food, COUNT(*) as times_logged, AVG(calories) as avg_calories
+            FROM entries
+            WHERE user_id = %s
+            GROUP BY food
+            ORDER BY times_logged DESC
+            LIMIT %s
+            """,
+            (user_id, limit),
+        )
+        rows = cur.fetchall()
+    finally:
+        close_connection(conn)
+    return [dict(row) for row in rows]
+
+
+def add_weight_log(user_id: int, logged_at: str, weight_kg: float, notes: str = None) -> bool:
+    """Add weight log entry (upserts if same day)."""
+    conn = normalize_connection(get_connection())
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            INSERT INTO weight_logs (user_id, logged_at, weight_kg, notes)
+            VALUES (%s, %s, %s, %s)
+            ON CONFLICT(user_id, logged_at) DO UPDATE SET weight_kg = EXCLUDED.weight_kg, notes = EXCLUDED.notes
+            """,
+            (user_id, logged_at, weight_kg, notes),
+        )
+        conn.commit()
+        return True
+    finally:
+        close_connection(conn)
+
+
+def get_weight_logs(user_id: int, limit: int = 90) -> List[dict]:
+    """Get weight logs for a user, newest first."""
+    conn = normalize_connection(get_connection())
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            SELECT id, logged_at, weight_kg, notes
+            FROM weight_logs
+            WHERE user_id = %s
+            ORDER BY logged_at DESC
+            LIMIT %s
+            """,
+            (user_id, limit),
+        )
+        rows = cur.fetchall()
+    finally:
+        close_connection(conn)
+    return [dict(row) for row in rows]
+
+
+def get_weight_trend(user_id: int, days: int = 30) -> dict:
+    """Get weight trend over past N days."""
+    end_date = date.today().isoformat()
+    start_date = (date.today() - timedelta(days=days)).isoformat()
+
+    conn = normalize_connection(get_connection())
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            SELECT MIN(weight_kg) as min_weight, MAX(weight_kg) as max_weight,
+                   AVG(weight_kg) as avg_weight
+            FROM weight_logs
+            WHERE user_id = %s AND logged_at BETWEEN %s AND %s
+            """,
+            (user_id, start_date, end_date),
+        )
+        row = cur.fetchone()
+
+        # Get current weight
+        cur.execute(
+            """
+            SELECT weight_kg FROM weight_logs
+            WHERE user_id = %s AND logged_at <= %s
+            ORDER BY logged_at DESC
+            LIMIT 1
+            """,
+            (user_id, end_date),
+        )
+        current = cur.fetchone()
+        current_weight = current["weight_kg"] if current else None
+
+        # Get weight change
+        cur.execute(
+            """
+            SELECT weight_kg FROM weight_logs
+            WHERE user_id = %s AND logged_at >= %s AND logged_at <= %s
+            ORDER BY logged_at ASC
+            LIMIT 1
+            """,
+            (user_id, start_date, end_date),
+        )
+        first = cur.fetchone()
+        first_weight = first["weight_kg"] if first else None
+
+        change = (current_weight - first_weight) if (current_weight and first_weight) else None
+
+    finally:
+        close_connection(conn)
+
+    return {
+        "current_weight": current_weight,
+        "min_weight": row["min_weight"],
+        "max_weight": row["max_weight"],
+        "avg_weight": row["avg_weight"],
+        "change_kg": change,
+        "trend": "↑" if change and change > 0 else "↓" if change and change < 0 else "→",
+    }
+
+
+def delete_weight_log(user_id: int, log_id: int) -> bool:
+    """Delete weight log with ownership check."""
+    conn = normalize_connection(get_connection())
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT id FROM weight_logs WHERE id = %s AND user_id = %s",
+            (log_id, user_id),
+        )
+        existing = cur.fetchone()
+        if not existing:
+            return False
+
+        cur.execute(
+            "DELETE FROM weight_logs WHERE id = %s AND user_id = %s",
+            (log_id, user_id),
+        )
+        conn.commit()
+        return True
+    finally:
+        close_connection(conn)
+
+
 def create_user(username: str, password: str) -> Optional[User]:
     """Create a new user. Returns the User or None if the username is taken."""
     hashed = generate_password_hash(password)
     try:
-        with get_connection() as conn:
-            cur = conn.execute(
-                "INSERT INTO users (username, password_hash) VALUES (?, ?)",
-                (username.strip(), hashed),
-            )
-            return User(id=cur.lastrowid, username=username.strip(), password_hash=hashed)
-    except sqlite3.IntegrityError:
-        return None  # username already exists
+        conn = normalize_connection(get_connection())
+        try:
+            cur = conn.cursor()
+            username = username.strip()
+
+            if conn.is_sqlite:
+                # SQLite: insert then fetch lastrowid
+                safe_execute(
+                    cur,
+                    "INSERT INTO users (username, password_hash) VALUES (%s, %s)",
+                    (username, hashed),
+                    conn,
+                )
+                new_id = cur.lastrowid
+            else:
+                # PostgreSQL: use RETURNING clause
+                safe_execute(
+                    cur,
+                    "INSERT INTO users (username, password_hash) VALUES (%s, %s) RETURNING id",
+                    (username, hashed),
+                    conn,
+                )
+                result = cur.fetchone()
+                new_id = result["id"]
+
+            conn.commit()
+            return User(id=new_id, username=username, password_hash=hashed)
+        finally:
+            close_connection(conn)
+    except Exception as e:
+        # Handle IntegrityError from both SQLite and PostgreSQL
+        if isinstance(e, (sqlite3.IntegrityError, psycopg2.IntegrityError)):
+            return None  # username already exists
+        raise
 
 
 def get_user_by_username(username: str) -> Optional[User]:
-    with get_connection() as conn:
-        row = conn.execute(
-            "SELECT id, username, password_hash FROM users WHERE username = ?",
+    conn = normalize_connection(get_connection())
+    try:
+        cur = conn.cursor()
+        safe_execute(
+            cur,
+            "SELECT id, username, password_hash FROM users WHERE username = %s",
             (username.strip(),),
-        ).fetchone()
+            conn,
+        )
+        row = cur.fetchone()
+    finally:
+        close_connection(conn)
     if not row:
         return None
     return User(id=row["id"], username=row["username"], password_hash=row["password_hash"])
 
 
 def get_user_by_id(user_id: int) -> Optional[User]:
-    with get_connection() as conn:
-        row = conn.execute(
-            "SELECT id, username, password_hash FROM users WHERE id = ?",
+    conn = normalize_connection(get_connection())
+    try:
+        cur = conn.cursor()
+        safe_execute(
+            cur,
+            "SELECT id, username, password_hash FROM users WHERE id = %s",
             (user_id,),
-        ).fetchone()
+            conn,
+        )
+        row = cur.fetchone()
+    finally:
+        close_connection(conn)
     if not row:
         return None
     return User(id=row["id"], username=row["username"], password_hash=row["password_hash"])

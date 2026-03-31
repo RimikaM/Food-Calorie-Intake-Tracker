@@ -41,6 +41,11 @@ from main import (
     create_entry_from_template,
     get_week_summary,
     get_macro_trends,
+    get_top_favorite_foods,
+    add_weight_log,
+    get_weight_logs,
+    get_weight_trend,
+    delete_weight_log,
 )
 from usda_api import UsdaFood, UsdaSearchResponse, search_foods
 
@@ -544,6 +549,73 @@ def insights():
         carbs_goal=carbs_goal,
         fat_goal=fat_goal,
     )
+
+
+@app.route("/favorites", methods=["GET"])
+@login_required
+def favorites():
+    """Show top 10 most-logged foods as quick-add buttons."""
+    favorites = get_top_favorite_foods(current_user.id, limit=10)
+    return render_template("favorites.html", favorites=favorites)
+
+
+@app.route("/favorites/<food_name>/log", methods=["POST"])
+@login_required
+def log_favorite(food_name: str):
+    """Quick-add entry from favorite."""
+    favorites = get_top_favorite_foods(current_user.id, limit=10)
+    fav = next((f for f in favorites if f["food"] == food_name), None)
+
+    if not fav:
+        return redirect(url_for("index"))
+
+    # Use average calories from history
+    avg_calories = int(fav["avg_calories"]) if fav["avg_calories"] else 0
+    add_entry(
+        food=food_name,
+        calories=avg_calories,
+        user_id=current_user.id,
+    )
+    return redirect(url_for("index"))
+
+
+@app.route("/weight", methods=["GET"])
+@login_required
+def weight_view():
+    """Show weight tracking dashboard."""
+    logs = get_weight_logs(current_user.id, limit=90)
+    trend = get_weight_trend(current_user.id, days=30)
+    return render_template("weight.html", logs=logs, trend=trend)
+
+
+@app.route("/weight", methods=["POST"])
+@login_required
+def add_weight():
+    """Add weight log entry."""
+    logged_at = request.form.get("logged_at", "").strip()
+    weight_raw = request.form.get("weight_kg", "").strip()
+    notes = request.form.get("notes", "").strip() or None
+
+    if not logged_at or not weight_raw:
+        return redirect(url_for("weight_view"))
+
+    try:
+        weight_kg = float(weight_raw)
+        if weight_kg <= 0 or weight_kg > 500:
+            return redirect(url_for("weight_view"))
+    except ValueError:
+        return redirect(url_for("weight_view"))
+
+    add_weight_log(current_user.id, logged_at, weight_kg, notes)
+    return redirect(url_for("weight_view"))
+
+
+@app.route("/weight/<int:log_id>/delete", methods=["POST"])
+@login_required
+def delete_weight(log_id: int):
+    """Delete weight log entry."""
+    delete_weight_log(current_user.id, log_id)
+    return redirect(url_for("weight_view"))
 
 
 if __name__ == "__main__":
