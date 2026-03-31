@@ -1,0 +1,87 @@
+{% extends "base.html" %}
+
+{% block body %}
+<main>
+  <section class="card">
+    <div class="card-header">
+      <h2>🏆 Leaderboards</h2>
+      <p class="subtitle">Global protein tracking rankings</p>
+    </div>
+
+    <!-- Weekly Leaderboard -->
+    <div style="margin-bottom: 24px;">
+      <h3>📅 This Week</h3>
+      {% if weekly %}
+      <div style="overflow-x: auto;">
+        <table style="width: 100%; border-collapse: collapse;">
+          <thead>
+            <tr style="border-bottom: 2px solid var(--muted);">
+              <th style="text-align: left; padding: 12px;">Rank</th>
+              <th style="text-align: left; padding: 12px;">Player</th>
+              <th style="text-align: right; padding: 12px;">Points</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for entry in weekly %}
+            <tr style="border-bottom: 1px solid var(--muted); {% if entry.username == current_user.username %}background: #efe;{% endif %}">
+              <td style="padding: 12px; font-weight: 600;">
+                {% if entry.rank == 1 %}🥇{% elif entry.rank == 2 %}🥈{% elif entry.rank == 3 %}🥉{% else %}#{{ entry.rank }}{% endif %}
+              </td>
+              <td style="padding: 12px;">
+                {% if entry.username != current_user.username %}
+                <a href="{{ url_for('friend_profile', username=entry.username) }}" style="color: inherit;">{{ entry.username }}</a>
+                {% else %}
+                <strong>{{ entry.username }} (You)</strong>
+                {% endif %}
+              </td>
+              <td style="text-align: right; padding: 12px; font-weight: 600;">{{ entry.points }}</td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+      {% else %}
+      <p class="list-empty">No data yet this week</p>
+      {% endif %}
+    </div>
+
+    <!-- Monthly Leaderboard -->
+    <div>
+      <h3>📈 This Month</h3>
+      {% if monthly %}
+      <div style="overflow-x: auto;">
+        <table style="width: 100%; border-collapse: collapse;">
+          <thead>
+            <tr style="border-bottom: 2px solid var(--muted);">
+              <th style="text-align: left; padding: 12px;">Rank</th>
+              <th style="text-align: left; padding: 12px;">Player</th>
+              <th style="text-align: right; padding: 12px;">Points</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for entry in monthly %}
+            <tr style="border-bottom: 1px solid var(--muted); {% if entry.username == current_user.username %}background: #efe;{% endif %}">
+              <td style="padding: 12px; font-weight: 600;">
+                {% if entry.rank == 1 %}🥇{% elif entry.rank == 2 %}🥈{% elif entry.rank == 3 %}🥉{% else %}#{{ entry.rank }}{% endif %}
+              </td>
+              <td style="padding: 12px;">
+                {% if entry.username != current_user.username %}
+                <a href="{{ url_for('friend_profile', username=entry.username) }}" style="color: inherit;">{{ entry.username }}</a>
+                {% else %}
+                <strong>{{ entry.username }} (You)</strong>
+                {% endif %}
+              </td>
+              <td style="text-align: right; padding: 12px; font-weight: 600;">{{ entry.points }}</td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+      {% else %}
+      <p class="list-empty">No data yet this month</p>
+      {% endif %}
+    </div>
+
+  </section>
+</main>
+{% endblock %}

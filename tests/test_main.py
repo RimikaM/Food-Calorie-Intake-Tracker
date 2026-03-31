@@ -562,3 +562,107 @@ class TestNotifications:
         assert any(n["event_type"] == "calorie_goal_reached" for n in notifs)
 
 
+class TestGamification:
+    def test_calculate_daily_points_no_protein(self, user):
+        """Test point calculation with no protein logged."""
+        m.set_setting("protein_goal_g", "150", user_id=user.id)
+        points = m.calculate_daily_points(user.id)
+        assert points == 0
+
+    def test_calculate_daily_points_hit_goal(self, user):
+        """Test points awarded for hitting protein goal."""
+        m.set_setting("protein_goal_g", "100", user_id=user.id)
+        m.add_entry("Chicken", 200, user.id, protein_g=100)
+
+        points = m.calculate_daily_points(user.id)
+        assert points == 100
+
+    def test_calculate_daily_points_partial_goal(self, user):
+        """Test points for partial goal achievement."""
+        m.set_setting("protein_goal_g", "100", user_id=user.id)
+        m.add_entry("Chicken", 200, user.id, protein_g=80)
+
+        points = m.calculate_daily_points(user.id)
+        assert points == 50
+
+    def test_get_leaderboard(self, user):
+        """Test leaderboard generation."""
+        m.set_setting("protein_goal_g", "100", user_id=user.id)
+        m.add_entry("Chicken", 200, user.id, protein_g=100)
+        m.calculate_daily_points(user.id)
+
+        leaderboard = m.get_leaderboard("weekly", limit=5)
+        assert len(leaderboard) > 0
+        assert leaderboard[0]["username"] == "testuser"
+
+    def test_get_user_points_summary(self, user):
+        """Test points summary calculation."""
+        m.set_setting("protein_goal_g", "100", user_id=user.id)
+        m.add_entry("Chicken", 200, user.id, protein_g=100)
+        m.calculate_daily_points(user.id)
+
+        summary = m.get_user_points_summary(user.id, days=30)
+        assert summary["total_points"] > 0
+        assert summary["days_logged"] >= 1
+
+    def test_add_friend(self, user):
+        """Test adding a friend."""
+        other = m.create_user("friend1", "password")
+        result = m.add_friend(user.id, "friend1")
+        assert result is True
+
+    def test_add_friend_not_found(self, user):
+        """Test adding non-existent friend."""
+        result = m.add_friend(user.id, "nonexistent")
+        assert result is False
+
+    def test_get_friends(self, user):
+        """Test getting friends list."""
+        other = m.create_user("friend1", "password")
+        m.add_friend(user.id, "friend1")
+
+        friends = m.get_friends(user.id)
+        assert len(friends) > 0
+        assert any(f["username"] == "friend1" for f in friends)
+
+    def test_remove_friend(self, user):
+        """Test removing a friend."""
+        other = m.create_user("friend1", "password")
+        m.add_friend(user.id, "friend1")
+
+        result = m.remove_friend(user.id, other.id)
+        assert result is True
+
+        friends = m.get_friends(user.id)
+        assert not any(f["username"] == "friend1" for f in friends)
+
+    def test_award_achievement(self, user):
+        """Test awarding achievement."""
+        result = m.award_achievement(user.id, "test_achievement", "Test Badge", "Test description", 50)
+        assert result is True
+
+    def test_get_achievements(self, user):
+        """Test getting achievements."""
+        m.award_achievement(user.id, "test1", "Badge 1", "Description 1", 50)
+        m.award_achievement(user.id, "test2", "Badge 2", "Description 2", 100)
+
+        achievements = m.get_achievements(user.id)
+        assert len(achievements) >= 2
+
+    def test_check_and_award_achievements(self, user):
+        """Test automatic achievement awarding."""
+        m.set_setting("protein_goal_g", "100", user_id=user.id)
+
+        # Simulate 7 days of logged protein by directly inserting points
+        for i in range(7):
+            date_str = (date.today() - timedelta(days=6-i)).isoformat()
+            m.calculate_daily_points(user.id, date_str)
+
+        m.check_and_award_achievements(user.id)
+        achievements = m.get_achievements(user.id)
+
+        # Should have streak achievement
+        assert any("Warrior" in a["name"] for a in achievements)
+
+
+

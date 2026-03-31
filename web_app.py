@@ -72,6 +72,20 @@ from main import (
     mark_notification_read,
     mark_all_notifications_read,
     check_daily_goals_and_notify,
+    calculate_daily_points,
+    get_leaderboard,
+    get_user_points_summary,
+    add_friend,
+    get_friends,
+    remove_friend,
+    get_friend_profile,
+    award_achievement,
+    get_achievements,
+    check_and_award_achievements,
+    normalize_connection,
+    get_connection,
+    safe_execute,
+    close_connection,
 )
 from usda_api import UsdaFood, UsdaSearchResponse, search_foods, search_foods_by_barcode
 
@@ -1062,6 +1076,122 @@ def mark_all_notifs_read():
     mark_all_notifications_read(current_user.id)
     flash("All notifications marked as read", "success")
     return redirect(url_for("notifications_list"))
+
+
+# Gamification Routes: Points & Leaderboards (Phase 1)
+
+@app.route("/points")
+@login_required
+def points():
+    """Show user's points and stats."""
+    # Calculate today's points if not already done
+    calculate_daily_points(current_user.id)
+
+    summary = get_user_points_summary(current_user.id, days=30)
+    leaderboard = get_leaderboard("weekly", limit=5)
+
+    return render_template("points.html", summary=summary, leaderboard=leaderboard)
+
+
+@app.route("/leaderboard")
+@login_required
+def leaderboard():
+    """Show global leaderboards."""
+    weekly = get_leaderboard("weekly", limit=20)
+    monthly = get_leaderboard("monthly", limit=20)
+
+    return render_template("leaderboard.html", weekly=weekly, monthly=monthly)
+
+
+# Gamification Routes: Friends (Phase 2)
+
+@app.route("/friends")
+@login_required
+def friends_list():
+    """Show and manage friends."""
+    friends = get_friends(current_user.id)
+    return render_template("friends.html", friends=friends)
+
+
+@app.route("/friends/add", methods=["POST"])
+@login_required
+def add_friend_route():
+    """Add a friend by username."""
+    friend_username = request.form.get("friend_username", "").strip()
+
+    if not friend_username:
+        flash("Enter a username", "error")
+        return redirect(url_for("friends_list"))
+
+    if add_friend(current_user.id, friend_username):
+        flash(f"Added {friend_username} as a friend!", "success")
+    else:
+        flash(f"Could not add {friend_username}. User not found or already friends.", "error")
+
+    return redirect(url_for("friends_list"))
+
+
+@app.route("/friends/<int:friend_id>/remove", methods=["POST"])
+@login_required
+def remove_friend_route(friend_id: int):
+    """Remove a friend."""
+    if remove_friend(current_user.id, friend_id):
+        flash("Friend removed", "success")
+    else:
+        flash("Error removing friend", "error")
+
+    return redirect(url_for("friends_list"))
+
+
+@app.route("/profile/<username>")
+@login_required
+def friend_profile(username: str):
+    """View friend's profile."""
+    # Get friend by username
+    try:
+        conn = normalize_connection(get_connection())
+        cur = conn.cursor()
+        safe_execute(
+            cur,
+            "SELECT id FROM users WHERE username = %s",
+            (username,),
+            conn,
+        )
+        friend_row = cur.fetchone()
+
+        if not friend_row:
+            close_connection(conn)
+            flash("Friend not found", "error")
+            return redirect(url_for("friends_list"))
+
+        friend_id = friend_row[0]
+        close_connection(conn)
+
+        profile = get_friend_profile(friend_id, current_user.id)
+
+        if not profile:
+            flash("Cannot view this profile", "error")
+            return redirect(url_for("friends_list"))
+
+        achievements = get_achievements(friend_id)
+        return render_template("profile.html", profile=profile, achievements=achievements)
+
+    except Exception as e:
+        close_connection(conn)
+        flash("Error loading profile", "error")
+        return redirect(url_for("friends_list"))
+
+
+# Gamification Routes: Achievements (Phase 3)
+
+@app.route("/achievements")
+@login_required
+def achievements():
+    """Show user's achievements."""
+    check_and_award_achievements(current_user.id)
+    user_achievements = get_achievements(current_user.id)
+
+    return render_template("achievements.html", achievements=user_achievements)
 
 
 if __name__ == "__main__":

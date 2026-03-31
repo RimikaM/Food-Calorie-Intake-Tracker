@@ -1,0 +1,51 @@
+{% extends "base.html" %}
+
+{% block body %}
+<main>
+  <section class="card">
+    <div class="card-header">
+      <h2>{{ profile.username }}</h2>
+      <p class="subtitle">Last 30 days</p>
+    </div>
+
+    <!-- Stats -->
+    <div class="grid" style="grid-template-columns: repeat(3, 1fr); gap: 12px; margin-bottom: 24px;">
+      <div style="background: var(--muted); padding: 16px; border-radius: 4px; text-align: center;">
+        <div style="font-size: 12px; color: var(--muted);">Total Points</div>
+        <div style="font-size: 28px; font-weight: 600;">{{ profile.total_points }}</div>
+      </div>
+      <div style="background: var(--muted); padding: 16px; border-radius: 4px; text-align: center;">
+        <div style="font-size: 12px; color: var(--muted);">Days Logged</div>
+        <div style="font-size: 28px; font-weight: 600;">{{ profile.days_logged }}</div>
+      </div>
+      <div style="background: var(--muted); padding: 16px; border-radius: 4px; text-align: center;">
+        <div style="font-size: 12px; color: var(--muted);">Avg/Day</div>
+        <div style="font-size: 28px; font-weight: 600;">{{ profile.avg_points | int }}</div>
+      </div>
+    </div>
+
+    <!-- Achievements -->
+    {% if achievements %}
+    <div>
+      <h3>🏆 Achievements</h3>
+      <div style="display: grid; gap: 8px;">
+        {% for achievement in achievements %}
+        <div style="background: var(--muted); padding: 12px; border-radius: 4px;">
+          <div style="font-weight: 600;">{{ achievement.name }}</div>
+          <div style="font-size: 13px; color: var(--muted);">{{ achievement.description }}</div>
+          <div style="font-size: 12px; margin-top: 4px;">+{{ achievement.points }} pts · {{ achievement.earned_at[:10] }}</div>
+        </div>
+        {% endfor %}
+      </div>
+    </div>
+    {% else %}
+    <p class="list-empty">No achievements yet</p>
+    {% endif %}
+
+    <div style="margin-top: 24px;">
+      <a href="{{ url_for('friends_list') }}" class="button button-secondary">Back</a>
+    </div>
+
+  </section>
+</main>
+{% endblock %}

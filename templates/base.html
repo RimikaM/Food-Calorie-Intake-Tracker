@@ -314,6 +314,18 @@
           <a href="{{ url_for('insights') }}" class="{% if active == 'insights' %}active{% endif %}"
             >Insights</a
           >
+          <a href="{{ url_for('points') }}" class="{% if active == 'points' %}active{% endif %}"
+            >🏆 Points</a
+          >
+          <a href="{{ url_for('friends_list') }}" class="{% if active == 'friends' %}active{% endif %}"
+            >👥 Friends</a
+          >
+          <a href="{{ url_for('leaderboard') }}" class="{% if active == 'leaderboard' %}active{% endif %}"
+            >📊 Leaderboard</a
+          >
+          <a href="{{ url_for('achievements') }}" class="{% if active == 'achievements' %}active{% endif %}"
+            >🎯 Achievements</a
+          >
           <a href="{{ url_for('settings_view') }}" class="{% if active == 'settings' %}active{% endif %}"
             >Settings</a
           >

@@ -585,3 +585,82 @@ class TestNotifications:
         resp = client.post("/notifications/mark-all-read")
         assert resp.status_code in [200, 302]  # Redirect or render
 
+
+# ---------------------------------------------------------------------------
+# Gamification: Points & Leaderboards
+# ---------------------------------------------------------------------------
+
+class TestGamificationPoints:
+    def test_points_requires_login(self, client):
+        assert client.get("/points").status_code == 302
+
+    def test_points_renders(self, logged_in_client):
+        client, user = logged_in_client
+        resp = client.get("/points")
+        assert resp.status_code == 200
+        assert b"Points" in resp.data or b"points" in resp.data.lower()
+
+    def test_leaderboard_requires_login(self, client):
+        assert client.get("/leaderboard").status_code == 302
+
+    def test_leaderboard_renders(self, logged_in_client):
+        client, user = logged_in_client
+        resp = client.get("/leaderboard")
+        assert resp.status_code == 200
+        assert b"Leaderboard" in resp.data
+
+
+# ---------------------------------------------------------------------------
+# Gamification: Friends
+# ---------------------------------------------------------------------------
+
+class TestGamificationFriends:
+    def test_friends_requires_login(self, client):
+        assert client.get("/friends").status_code == 302
+
+    def test_friends_renders(self, logged_in_client):
+        client, user = logged_in_client
+        resp = client.get("/friends")
+        assert resp.status_code == 200
+        assert b"Friends" in resp.data
+
+    def test_add_friend(self, logged_in_client):
+        client, user = logged_in_client
+        other = m.create_user("friend1", "password")
+
+        resp = client.post("/friends/add", data={"friend_username": "friend1"})
+        assert resp.status_code in [200, 302]
+
+    def test_remove_friend(self, logged_in_client):
+        client, user = logged_in_client
+        other = m.create_user("friend1", "password")
+        m.add_friend(user.id, "friend1")
+
+        resp = client.post(f"/friends/{other.id}/remove")
+        assert resp.status_code in [200, 302]
+
+    def test_friend_profile(self, logged_in_client):
+        client, user = logged_in_client
+        other = m.create_user("friend1", "password")
+        m.add_friend(user.id, "friend1")
+
+        resp = client.get("/profile/friend1")
+        # Should either render profile (200) or redirect (302 if error)
+        assert resp.status_code in [200, 302]
+
+
+# ---------------------------------------------------------------------------
+# Gamification: Achievements
+# ---------------------------------------------------------------------------
+
+class TestGamificationAchievements:
+    def test_achievements_requires_login(self, client):
+        assert client.get("/achievements").status_code == 302
+
+    def test_achievements_renders(self, logged_in_client):
+        client, user = logged_in_client
+        resp = client.get("/achievements")
+        assert resp.status_code == 200
+        assert b"Achievement" in resp.data
+
+

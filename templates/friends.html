@@ -1,0 +1,40 @@
+{% extends "base.html" %}
+
+{% block body %}
+<main>
+  <section class="card">
+    <div class="card-header">
+      <h2>👥 Friends</h2>
+      <p class="subtitle">Compare progress with friends</p>
+    </div>
+
+    <!-- Add Friend Form -->
+    <form method="post" action="{{ url_for('add_friend_route') }}" style="background: var(--muted); padding: 16px; border-radius: 4px; margin-bottom: 24px; display: flex; gap: 8px;">
+      <input type="text" name="friend_username" placeholder="Friend's username" required style="flex: 1;">
+      <button type="submit" class="button">Add Friend</button>
+    </form>
+
+    <!-- Friends List -->
+    {% if friends %}
+    <div style="display: grid; gap: 12px;">
+      {% for friend in friends %}
+      <div style="background: var(--muted); padding: 16px; border-radius: 4px; display: flex; justify-content: space-between; align-items: center;">
+        <div style="flex: 1;">
+          <div style="font-weight: 600; margin-bottom: 4px;">
+            <a href="{{ url_for('friend_profile', username=friend.username) }}" style="color: inherit; text-decoration: none;">{{ friend.username }}</a>
+          </div>
+          <div style="font-size: 13px; color: var(--muted);">This week: <strong>{{ friend.this_week_points }} pts</strong></div>
+        </div>
+        <form method="post" action="{{ url_for('remove_friend_route', friend_id=friend.user_id) }}" style="display: inline;">
+          <button type="submit" class="button button-secondary" style="padding: 6px 12px; font-size: 12px;" onclick="return confirm('Remove this friend?');">Remove</button>
+        </form>
+      </div>
+      {% endfor %}
+    </div>
+    {% else %}
+    <p class="list-empty">No friends yet. Add someone to get started!</p>
+    {% endif %}
+
+  </section>
+</main>
+{% endblock %}

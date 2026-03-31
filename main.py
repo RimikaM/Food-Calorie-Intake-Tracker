@@ -284,6 +284,50 @@ def init_db() -> None:
                 action_url TEXT
             );
             """,
+            """
+            CREATE TABLE IF NOT EXISTS users_friends (
+                user_id INTEGER NOT NULL REFERENCES users(id),
+                friend_id INTEGER NOT NULL REFERENCES users(id),
+                status TEXT DEFAULT 'accepted',
+                added_at TEXT NOT NULL,
+                PRIMARY KEY (user_id, friend_id)
+            );
+            """,
+            """
+            CREATE TABLE IF NOT EXISTS user_points (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL REFERENCES users(id),
+                points_date TEXT NOT NULL,
+                daily_points INTEGER DEFAULT 0,
+                streak_multiplier REAL DEFAULT 1.0,
+                protein_g REAL,
+                protein_goal_g REAL,
+                UNIQUE(user_id, points_date)
+            );
+            """,
+            """
+            CREATE TABLE IF NOT EXISTS leaderboards (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL REFERENCES users(id),
+                period_start TEXT NOT NULL,
+                period_end TEXT NOT NULL,
+                total_points INTEGER DEFAULT 0,
+                period_type TEXT NOT NULL,
+                UNIQUE(user_id, period_start, period_type)
+            );
+            """,
+            """
+            CREATE TABLE IF NOT EXISTS achievements (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL REFERENCES users(id),
+                achievement_type TEXT NOT NULL,
+                achievement_name TEXT NOT NULL,
+                description TEXT,
+                earned_at TEXT NOT NULL,
+                points_awarded INTEGER DEFAULT 0,
+                UNIQUE(user_id, achievement_type)
+            );
+            """,
         ]
 
         cur = conn.cursor()
@@ -2170,6 +2214,480 @@ def check_daily_goals_and_notify(user_id: int) -> None:
                 "You've logged food for 7 consecutive days!",
                 "/entries",
             )
+
+
+# Gamification: Points & Leaderboards (Phase 1)
+
+def calculate_daily_points(user_id: int, points_date: str = None) -> int:
+    """Calculate points earned for a day based on protein intake vs goal."""
+    if points_date is None:
+        points_date = date.today().isoformat()
+
+    conn = normalize_connection(get_connection())
+    try:
+        cur = conn.cursor()
+
+        # Get protein goal
+        protein_goal_str = get_setting("protein_goal_g", user_id=user_id)
+        try:
+            protein_goal = float(protein_goal_str) if protein_goal_str else 150.0
+        except (ValueError, TypeError):
+            protein_goal = 150.0
+
+        # Get total protein for the day
+        safe_execute(
+            cur,
+            """
+            SELECT COALESCE(SUM(protein_g), 0) as total_protein
+            FROM entries
+            WHERE user_id = %s AND DATE(eaten_at) = %s
+            """,
+            (user_id, points_date),
+            conn,
+        )
+        row = cur.fetchone()
+        total_protein = row[0] if row else 0
+
+        # Calculate points
+        points = 0
+        if total_protein >= protein_goal:
+            points = 100
+        elif total_protein >= protein_goal * 0.75:
+            points = 50
+        elif total_protein >= protein_goal * 0.5:
+            points = 25
+
+        # Check for streaks and apply multiplier
+        multiplier = 1.0
+        safe_execute(
+            cur,
+            """
+            SELECT COUNT(DISTINCT points_date) as consecutive_days
+            FROM user_points
+            WHERE user_id = %s AND points_date >= DATE('now', '-30 days')
+            ORDER BY points_date DESC
+            """,
+            (user_id,),
+            conn,
+        )
+        streak_result = cur.fetchone()
+        streak = streak_result[0] if streak_result else 0
+
+        if streak >= 30:
+            multiplier = 2.0
+        elif streak >= 7:
+            multiplier = 1.5
+
+        final_points = int(points * multiplier)
+
+        # Store in user_points
+        safe_execute(
+            cur,
+            """
+            INSERT INTO user_points (user_id, points_date, daily_points, streak_multiplier, protein_g, protein_goal_g)
+            VALUES (%s, %s, %s, %s, %s, %s)
+            ON CONFLICT(user_id, points_date) DO UPDATE SET
+                daily_points = excluded.daily_points,
+                streak_multiplier = excluded.streak_multiplier,
+                protein_g = excluded.protein_g,
+                protein_goal_g = excluded.protein_goal_g
+            """,
+            (user_id, points_date, final_points, multiplier, total_protein, protein_goal),
+            conn,
+        )
+
+        close_connection(conn)
+        return final_points
+
+    except (sqlite3.Error, psycopg2.Error) as e:
+        close_connection(conn)
+        print(f"Error calculating points: {e}")
+        return 0
+
+
+def get_leaderboard(period_type: str = "weekly", limit: int = 10) -> List[dict]:
+    """Get leaderboard rankings (weekly or monthly)."""
+    conn = normalize_connection(get_connection())
+    try:
+        cur = conn.cursor()
+
+        # Determine date range
+        today = date.today()
+        if period_type == "weekly":
+            period_start = today - timedelta(days=today.weekday())
+            period_end = period_start + timedelta(days=6)
+        else:  # monthly
+            period_start = date(today.year, today.month, 1)
+            if today.month == 12:
+                period_end = date(today.year + 1, 1, 1) - timedelta(days=1)
+            else:
+                period_end = date(today.year, today.month + 1, 1) - timedelta(days=1)
+
+        # Get total points for period
+        safe_execute(
+            cur,
+            """
+            SELECT u.id, u.username, COALESCE(SUM(up.daily_points), 0) as total_points
+            FROM users u
+            LEFT JOIN user_points up ON u.id = up.user_id
+                AND up.points_date >= %s AND up.points_date <= %s
+            GROUP BY u.id, u.username
+            ORDER BY total_points DESC
+            LIMIT %s
+            """,
+            (period_start.isoformat(), period_end.isoformat(), limit),
+            conn,
+        )
+        rows = cur.fetchall()
+
+        result = []
+        for idx, row in enumerate(rows, 1):
+            result.append({
+                "rank": idx,
+                "user_id": row[0],
+                "username": row[1],
+                "points": row[2],
+            })
+
+        close_connection(conn)
+        return result
+
+    except (sqlite3.Error, psycopg2.Error) as e:
+        close_connection(conn)
+        print(f"Error fetching leaderboard: {e}")
+        return []
+
+
+def get_user_points_summary(user_id: int, days: int = 30) -> dict:
+    """Get user's points summary for last N days."""
+    conn = normalize_connection(get_connection())
+    try:
+        cur = conn.cursor()
+
+        start_date = (date.today() - timedelta(days=days)).isoformat()
+
+        safe_execute(
+            cur,
+            """
+            SELECT
+                COUNT(DISTINCT points_date) as days_logged,
+                SUM(daily_points) as total_points,
+                AVG(daily_points) as avg_daily_points,
+                MAX(daily_points) as best_day
+            FROM user_points
+            WHERE user_id = %s AND points_date >= %s
+            """,
+            (user_id, start_date),
+            conn,
+        )
+        row = cur.fetchone()
+
+        result = {
+            "days_logged": row[0] if row and row[0] else 0,
+            "total_points": row[1] if row and row[1] else 0,
+            "avg_daily_points": row[2] if row and row[2] else 0,
+            "best_day": row[3] if row and row[3] else 0,
+        }
+
+        close_connection(conn)
+        return result
+
+    except (sqlite3.Error, psycopg2.Error) as e:
+        close_connection(conn)
+        print(f"Error getting points summary: {e}")
+        return {"days_logged": 0, "total_points": 0, "avg_daily_points": 0, "best_day": 0}
+
+
+# Gamification: Friends (Phase 2)
+
+def add_friend(user_id: int, friend_username: str) -> bool:
+    """Send friend request or accept existing request."""
+    conn = normalize_connection(get_connection())
+    try:
+        cur = conn.cursor()
+
+        # Find friend by username
+        safe_execute(
+            cur,
+            "SELECT id FROM users WHERE username = %s",
+            (friend_username,),
+            conn,
+        )
+        friend_row = cur.fetchone()
+        if not friend_row:
+            close_connection(conn)
+            return False
+
+        friend_id = friend_row[0]
+        if friend_id == user_id:
+            close_connection(conn)
+            return False
+
+        # Add bidirectional friendship
+        now = datetime.now().isoformat()
+        for uid1, uid2 in [(user_id, friend_id), (friend_id, user_id)]:
+            safe_execute(
+                cur,
+                """
+                INSERT OR IGNORE INTO users_friends (user_id, friend_id, status, added_at)
+                VALUES (%s, %s, 'accepted', %s)
+                """,
+                (uid1, uid2, now),
+                conn,
+            )
+
+        close_connection(conn)
+        return True
+
+    except (sqlite3.Error, psycopg2.Error) as e:
+        close_connection(conn)
+        print(f"Error adding friend: {e}")
+        return False
+
+
+def get_friends(user_id: int) -> List[dict]:
+    """Get list of user's friends."""
+    conn = normalize_connection(get_connection())
+    try:
+        cur = conn.cursor()
+
+        safe_execute(
+            cur,
+            """
+            SELECT u.id, u.username, COALESCE(SUM(up.daily_points), 0) as this_week_points
+            FROM users_friends uf
+            JOIN users u ON uf.friend_id = u.id
+            LEFT JOIN user_points up ON u.id = up.user_id
+                AND up.points_date >= DATE('now', '-7 days')
+            WHERE uf.user_id = %s AND uf.status = 'accepted'
+            GROUP BY u.id, u.username
+            ORDER BY this_week_points DESC
+            """,
+            (user_id,),
+            conn,
+        )
+        rows = cur.fetchall()
+
+        result = []
+        for row in rows:
+            result.append({
+                "user_id": row[0],
+                "username": row[1],
+                "this_week_points": row[2] if row[2] else 0,
+            })
+
+        close_connection(conn)
+        return result
+
+    except (sqlite3.Error, psycopg2.Error) as e:
+        close_connection(conn)
+        print(f"Error getting friends: {e}")
+        return []
+
+
+def remove_friend(user_id: int, friend_id: int) -> bool:
+    """Remove friend (bidirectional)."""
+    conn = normalize_connection(get_connection())
+    try:
+        cur = conn.cursor()
+
+        for uid1, uid2 in [(user_id, friend_id), (friend_id, user_id)]:
+            safe_execute(
+                cur,
+                "DELETE FROM users_friends WHERE user_id = %s AND friend_id = %s",
+                (uid1, uid2),
+                conn,
+            )
+
+        close_connection(conn)
+        return True
+
+    except (sqlite3.Error, psycopg2.Error) as e:
+        close_connection(conn)
+        print(f"Error removing friend: {e}")
+        return False
+
+
+def get_friend_profile(friend_id: int, user_id: int) -> Optional[dict]:
+    """Get friend's profile with stats (only if they're friends)."""
+    conn = normalize_connection(get_connection())
+    try:
+        cur = conn.cursor()
+
+        # Verify friendship
+        safe_execute(
+            cur,
+            """
+            SELECT status FROM users_friends
+            WHERE (user_id = %s AND friend_id = %s) OR (user_id = %s AND friend_id = %s)
+            """,
+            (user_id, friend_id, friend_id, user_id),
+            conn,
+        )
+        if not cur.fetchone():
+            close_connection(conn)
+            return None
+
+        # Get profile
+        safe_execute(
+            cur,
+            "SELECT id, username FROM users WHERE id = %s",
+            (friend_id,),
+            conn,
+        )
+        user_row = cur.fetchone()
+
+        if not user_row:
+            close_connection(conn)
+            return None
+
+        # Get stats
+        safe_execute(
+            cur,
+            """
+            SELECT
+                SUM(daily_points) as total_points,
+                COUNT(DISTINCT points_date) as days_logged,
+                AVG(daily_points) as avg_points
+            FROM user_points
+            WHERE user_id = %s AND points_date >= DATE('now', '-30 days')
+            """,
+            (friend_id,),
+            conn,
+        )
+        stats = cur.fetchone()
+
+        close_connection(conn)
+        return {
+            "user_id": user_row[0],
+            "username": user_row[1],
+            "total_points": stats[0] if stats and stats[0] else 0,
+            "days_logged": stats[1] if stats and stats[1] else 0,
+            "avg_points": stats[2] if stats and stats[2] else 0,
+        }
+
+    except (sqlite3.Error, psycopg2.Error) as e:
+        close_connection(conn)
+        print(f"Error getting friend profile: {e}")
+        return None
+
+
+# Gamification: Achievements (Phase 3)
+
+def award_achievement(user_id: int, achievement_type: str, achievement_name: str, description: str = "", points_bonus: int = 0) -> bool:
+    """Award achievement badge to user."""
+    conn = normalize_connection(get_connection())
+    try:
+        cur = conn.cursor()
+        now = datetime.now().isoformat()
+
+        safe_execute(
+            cur,
+            """
+            INSERT INTO achievements (user_id, achievement_type, achievement_name, description, earned_at, points_awarded)
+            VALUES (%s, %s, %s, %s, %s, %s)
+            ON CONFLICT(user_id, achievement_type) DO NOTHING
+            """,
+            (user_id, achievement_type, achievement_name, description, now, points_bonus),
+            conn,
+        )
+
+        close_connection(conn)
+        return True
+
+    except (sqlite3.Error, psycopg2.Error) as e:
+        close_connection(conn)
+        print(f"Error awarding achievement: {e}")
+        return False
+
+
+def get_achievements(user_id: int) -> List[dict]:
+    """Get all achievements earned by user."""
+    conn = normalize_connection(get_connection())
+    try:
+        cur = conn.cursor()
+
+        safe_execute(
+            cur,
+            """
+            SELECT id, achievement_type, achievement_name, description, earned_at, points_awarded
+            FROM achievements
+            WHERE user_id = %s
+            ORDER BY earned_at DESC
+            """,
+            (user_id,),
+            conn,
+        )
+        rows = cur.fetchall()
+
+        result = []
+        for row in rows:
+            result.append({
+                "id": row[0],
+                "type": row[1],
+                "name": row[2],
+                "description": row[3],
+                "earned_at": row[4],
+                "points": row[5],
+            })
+
+        close_connection(conn)
+        return result
+
+    except (sqlite3.Error, psycopg2.Error) as e:
+        close_connection(conn)
+        print(f"Error getting achievements: {e}")
+        return []
+
+
+def check_and_award_achievements(user_id: int) -> None:
+    """Check milestones and automatically award achievements."""
+    conn = normalize_connection(get_connection())
+    try:
+        cur = conn.cursor()
+
+        # Check 7-day logging streak
+        safe_execute(
+            cur,
+            """
+            SELECT COUNT(DISTINCT points_date) as streak
+            FROM user_points
+            WHERE user_id = %s AND points_date >= DATE('now', '-7 days')
+            """,
+            (user_id,),
+            conn,
+        )
+        streak_row = cur.fetchone()
+        streak = streak_row[0] if streak_row else 0
+
+        if streak >= 7:
+            award_achievement(user_id, "streak_7", "🔥 Protein Warrior", "Logged protein for 7+ days", 50)
+
+        # Check 30-day streak
+        if streak >= 30:
+            award_achievement(user_id, "streak_30", "💪 Protein Legend", "Logged protein for 30+ days", 200)
+
+        # Check 1000 total points
+        safe_execute(
+            cur,
+            "SELECT COALESCE(SUM(daily_points), 0) FROM user_points WHERE user_id = %s",
+            (user_id,),
+            conn,
+        )
+        total_points_row = cur.fetchone()
+        total_points = total_points_row[0] if total_points_row else 0
+
+        if total_points >= 1000:
+            award_achievement(user_id, "points_1000", "📈 Point Master", "Earned 1000+ total points", 100)
+
+        if total_points >= 5000:
+            award_achievement(user_id, "points_5000", "👑 Elite Tracker", "Earned 5000+ total points", 500)
+
+        close_connection(conn)
+
+    except (sqlite3.Error, psycopg2.Error) as e:
+        close_connection(conn)
+        print(f"Error checking achievements: {e}")
 
 
 def verify_password(user: User, password: str) -> bool:
