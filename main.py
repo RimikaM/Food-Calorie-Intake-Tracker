@@ -242,6 +242,36 @@ def init_db() -> None:
                 UNIQUE(user_id, log_date, log_type)
             );
             """,
+            """
+            CREATE TABLE IF NOT EXISTS recipes (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL REFERENCES users(id),
+                name TEXT NOT NULL,
+                description TEXT,
+                servings REAL DEFAULT 1.0,
+                created_at TEXT NOT NULL
+            );
+            """,
+            """
+            CREATE TABLE IF NOT EXISTS recipe_ingredients (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                recipe_id INTEGER NOT NULL REFERENCES recipes(id),
+                food_id INTEGER REFERENCES foods(id),
+                food_name TEXT NOT NULL,
+                quantity_g REAL NOT NULL,
+                notes TEXT
+            );
+            """,
+            """
+            CREATE TABLE IF NOT EXISTS barcodes (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                ean_code TEXT UNIQUE NOT NULL,
+                fdc_id INTEGER REFERENCES foods(id),
+                food_name TEXT,
+                last_scanned TEXT,
+                scan_count INTEGER DEFAULT 1
+            );
+            """,
         ]
 
         cur = conn.cursor()
@@ -1176,6 +1206,383 @@ def get_wellness_trend(user_id: int, log_type: str, days: int = 30) -> dict:
         "avg_value": row["avg_value"],
         "days_logged": row["days_logged"],
     }
+
+
+# ===== Feature 9: Recipe Builder =====
+
+
+def create_recipe(user_id: int, name: str, description: Optional[str] = None, servings: float = 1.0) -> Optional[int]:
+    """Create a new recipe and return recipe_id."""
+    conn = normalize_connection(get_connection())
+    try:
+        cur = conn.cursor()
+        created_at = datetime.now().isoformat(timespec="seconds")
+
+        if conn.is_sqlite:
+            cur.execute(
+                """
+                INSERT INTO recipes (user_id, name, description, servings, created_at)
+                VALUES (%s, %s, %s, %s, %s)
+                """,
+                (user_id, name.strip(), description or None, servings, created_at),
+            )
+            recipe_id = cur.lastrowid
+        else:
+            cur.execute(
+                """
+                INSERT INTO recipes (user_id, name, description, servings, created_at)
+                VALUES (%s, %s, %s, %s, %s)
+                RETURNING id
+                """,
+                (user_id, name.strip(), description or None, servings, created_at),
+            )
+            result = cur.fetchone()
+            recipe_id = result["id"]
+
+        conn.commit()
+        return recipe_id
+    finally:
+        close_connection(conn)
+
+
+def add_recipe_ingredient(
+    recipe_id: int, food_id: int, food_name: str, quantity_g: float, notes: Optional[str] = None
+) -> bool:
+    """Add ingredient to recipe."""
+    conn = normalize_connection(get_connection())
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            INSERT INTO recipe_ingredients (recipe_id, food_id, food_name, quantity_g, notes)
+            VALUES (%s, %s, %s, %s, %s)
+            """,
+            (recipe_id, food_id if food_id > 0 else None, food_name.strip(), quantity_g, notes or None),
+        )
+        conn.commit()
+        return True
+    finally:
+        close_connection(conn)
+
+
+def get_recipes(user_id: int) -> List[dict]:
+    """Get all recipes for user with calculated macro totals."""
+    conn = normalize_connection(get_connection())
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            SELECT r.id, r.name, r.description, r.servings, r.created_at
+            FROM recipes r
+            WHERE r.user_id = %s
+            ORDER BY r.created_at DESC
+            """,
+            (user_id,),
+        )
+        rows = cur.fetchall()
+    finally:
+        close_connection(conn)
+
+    result = []
+    for row in rows:
+        recipe_dict = dict(row)
+        macros = calculate_recipe_macros(row["id"])
+        recipe_dict.update(macros)
+        result.append(recipe_dict)
+
+    return result
+
+
+def get_recipe_by_id(recipe_id: int, user_id: int) -> Optional[dict]:
+    """Get recipe with all ingredients and ownership check."""
+    conn = normalize_connection(get_connection())
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT id, name, description, servings, created_at FROM recipes WHERE id = %s AND user_id = %s",
+            (recipe_id, user_id),
+        )
+        recipe_row = cur.fetchone()
+        if not recipe_row:
+            return None
+
+        cur.execute(
+            """
+            SELECT id, food_id, food_name, quantity_g, notes
+            FROM recipe_ingredients
+            WHERE recipe_id = %s
+            ORDER BY id
+            """,
+            (recipe_id,),
+        )
+        ingredient_rows = cur.fetchall()
+    finally:
+        close_connection(conn)
+
+    recipe = dict(recipe_row)
+    recipe["ingredients"] = [dict(row) for row in ingredient_rows]
+    macros = calculate_recipe_macros(recipe_id)
+    recipe.update(macros)
+    return recipe
+
+
+def update_recipe(recipe_id: int, user_id: int, name: str, description: Optional[str] = None, servings: float = 1.0) -> bool:
+    """Update recipe details."""
+    conn = normalize_connection(get_connection())
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT id FROM recipes WHERE id = %s AND user_id = %s",
+            (recipe_id, user_id),
+        )
+        if not cur.fetchone():
+            return False
+
+        cur.execute(
+            """
+            UPDATE recipes
+            SET name = %s, description = %s, servings = %s
+            WHERE id = %s AND user_id = %s
+            """,
+            (name.strip(), description or None, servings, recipe_id, user_id),
+        )
+        conn.commit()
+        return True
+    finally:
+        close_connection(conn)
+
+
+def delete_recipe(recipe_id: int, user_id: int) -> bool:
+    """Delete recipe (cascades to ingredients)."""
+    conn = normalize_connection(get_connection())
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT id FROM recipes WHERE id = %s AND user_id = %s",
+            (recipe_id, user_id),
+        )
+        if not cur.fetchone():
+            return False
+
+        cur.execute("DELETE FROM recipe_ingredients WHERE recipe_id = %s", (recipe_id,))
+        cur.execute("DELETE FROM recipes WHERE id = %s AND user_id = %s", (recipe_id, user_id))
+        conn.commit()
+        return True
+    finally:
+        close_connection(conn)
+
+
+def calculate_recipe_macros(recipe_id: int) -> dict:
+    """Calculate total and per-serving macros for recipe."""
+    conn = normalize_connection(get_connection())
+    try:
+        cur = conn.cursor()
+        # Get recipe servings
+        cur.execute("SELECT servings FROM recipes WHERE id = %s", (recipe_id,))
+        recipe_row = cur.fetchone()
+        if not recipe_row:
+            return {"total_calories": 0, "total_protein_g": 0, "total_carbs_g": 0, "total_fat_g": 0}
+
+        servings = recipe_row["servings"] or 1.0
+
+        # Get ingredients with food macros
+        cur.execute(
+            """
+            SELECT ri.quantity_g, f.calories, f.protein_g, f.carbs_g, f.fat_g
+            FROM recipe_ingredients ri
+            LEFT JOIN foods f ON ri.food_id = f.id
+            WHERE ri.recipe_id = %s
+            """,
+            (recipe_id,),
+        )
+        ingredients = cur.fetchall()
+    finally:
+        close_connection(conn)
+
+    total_cal = 0.0
+    total_protein = 0.0
+    total_carbs = 0.0
+    total_fat = 0.0
+
+    for ing in ingredients:
+        if ing["calories"] is None:
+            continue
+        # Scale macros: food macros are per 100g
+        scale_factor = ing["quantity_g"] / 100.0
+        total_cal += (ing["calories"] or 0) * scale_factor
+        total_protein += (ing["protein_g"] or 0) * scale_factor
+        total_carbs += (ing["carbs_g"] or 0) * scale_factor
+        total_fat += (ing["fat_g"] or 0) * scale_factor
+
+    return {
+        "total_calories": round(total_cal, 1),
+        "total_protein_g": round(total_protein, 1),
+        "total_carbs_g": round(total_carbs, 1),
+        "total_fat_g": round(total_fat, 1),
+        "per_serving_calories": round(total_cal / servings, 1),
+        "per_serving_protein_g": round(total_protein / servings, 1),
+        "per_serving_carbs_g": round(total_carbs / servings, 1),
+        "per_serving_fat_g": round(total_fat / servings, 1),
+    }
+
+
+def log_recipe(recipe_id: int, user_id: int, servings: float = 1.0) -> bool:
+    """Create food entries from recipe for user."""
+    recipe = get_recipe_by_id(recipe_id, user_id)
+    if not recipe:
+        return False
+
+    # Create entry for total recipe (with scaled servings)
+    macros = calculate_recipe_macros(recipe_id)
+    calories = macros["total_calories"]
+    protein_g = macros["total_protein_g"]
+    carbs_g = macros["total_carbs_g"]
+    fat_g = macros["total_fat_g"]
+
+    # Scale by requested servings
+    if servings != 1.0:
+        calories *= servings
+        protein_g *= servings
+        carbs_g *= servings
+        fat_g *= servings
+
+    add_entry(
+        food=f"{recipe['name']} ({servings} servings)",
+        calories=int(calories),
+        user_id=user_id,
+        protein_g=protein_g if protein_g > 0 else None,
+        carbs_g=carbs_g if carbs_g > 0 else None,
+        fat_g=fat_g if fat_g > 0 else None,
+        meal="recipe",
+    )
+    return True
+
+
+# Feature 10: Barcode Scanning
+
+def lookup_barcode(ean_code: str, user_id: int) -> Optional[dict]:
+    """Look up barcode in cache, query USDA if needed, store result."""
+    conn = normalize_connection(get_connection())
+    try:
+        cur = conn.cursor()
+
+        # Check if barcode is cached
+        safe_execute(
+            cur,
+            "SELECT id, fdc_id, food_name, scan_count FROM barcodes WHERE ean_code = %s",
+            (ean_code,),
+            conn,
+        )
+        cached = cur.fetchone()
+
+        if cached:
+            # Update scan count and last_scanned
+            barcode_id, fdc_id, food_name, scan_count = cached
+            now = datetime.now().isoformat()
+            safe_execute(
+                cur,
+                "UPDATE barcodes SET scan_count = %s, last_scanned = %s WHERE ean_code = %s",
+                (scan_count + 1, now, ean_code),
+                conn,
+            )
+            close_connection(conn)
+            return {
+                "ean_code": ean_code,
+                "fdc_id": fdc_id,
+                "food_name": food_name,
+                "from_cache": True,
+                "scan_count": scan_count + 1,
+            }
+
+        close_connection(conn)
+        return None
+    except (sqlite3.Error, psycopg2.Error) as e:
+        close_connection(conn)
+        print(f"Error looking up barcode: {e}")
+        return None
+
+
+def add_barcode_mapping(ean_code: str, food_id: int, food_name: str = "") -> bool:
+    """Add or update barcode mapping to a food."""
+    conn = normalize_connection(get_connection())
+    try:
+        cur = conn.cursor()
+        now = datetime.now().isoformat()
+
+        # Upsert: insert or update if exists
+        if conn.is_sqlite:
+            safe_execute(
+                cur,
+                """
+                INSERT INTO barcodes (ean_code, fdc_id, food_name, last_scanned, scan_count)
+                VALUES (%s, %s, %s, %s, 1)
+                ON CONFLICT(ean_code) DO UPDATE SET
+                  fdc_id = excluded.fdc_id,
+                  food_name = excluded.food_name,
+                  last_scanned = excluded.last_scanned
+                """,
+                (ean_code, food_id, food_name, now),
+                conn,
+            )
+        else:
+            # PostgreSQL
+            cur.execute(
+                """
+                INSERT INTO barcodes (ean_code, fdc_id, food_name, last_scanned, scan_count)
+                VALUES (%s, %s, %s, %s, 1)
+                ON CONFLICT(ean_code) DO UPDATE SET
+                  fdc_id = EXCLUDED.fdc_id,
+                  food_name = EXCLUDED.food_name,
+                  last_scanned = EXCLUDED.last_scanned
+                """,
+                (ean_code, food_id, food_name, now),
+            )
+
+        close_connection(conn)
+        return True
+    except (sqlite3.Error, psycopg2.Error) as e:
+        close_connection(conn)
+        print(f"Error adding barcode mapping: {e}")
+        return False
+
+
+def get_barcode_history(user_id: int, limit: int = 10) -> List[dict]:
+    """Get recently scanned barcodes with scan count for user's account."""
+    conn = normalize_connection(get_connection())
+    try:
+        cur = conn.cursor()
+
+        # Get the most recently scanned barcodes (across all users for now, can add user tracking if needed)
+        safe_execute(
+            cur,
+            """
+            SELECT id, ean_code, fdc_id, food_name, scan_count, last_scanned
+            FROM barcodes
+            ORDER BY last_scanned DESC, scan_count DESC
+            LIMIT %s
+            """,
+            (limit,),
+            conn,
+        )
+        rows = cur.fetchall()
+
+        result = []
+        for row in rows:
+            result.append({
+                "id": row[0],
+                "ean_code": row[1],
+                "fdc_id": row[2],
+                "food_name": row[3],
+                "scan_count": row[4],
+                "last_scanned": row[5],
+            })
+
+        close_connection(conn)
+        return result
+    except (sqlite3.Error, psycopg2.Error) as e:
+        close_connection(conn)
+        print(f"Error getting barcode history: {e}")
+        return []
 
 
 def create_user(username: str, password: str) -> Optional[User]:

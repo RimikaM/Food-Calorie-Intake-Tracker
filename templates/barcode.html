@@ -1,0 +1,129 @@
+{% extends "base.html" %}
+
+{% block body %}
+<main>
+  <section class="card">
+    <div class="card-header">
+      <h2>Barcode Scanner</h2>
+      <p class="subtitle">Scan or enter a barcode to quickly log foods</p>
+    </div>
+
+    <!-- Manual EAN Input -->
+    <div style="background: var(--muted); padding: 16px; border-radius: 4px; margin-bottom: 24px;">
+      <div>
+        <label for="manualEan">Enter or paste EAN code:</label>
+        <div style="display: flex; gap: 8px; margin-top: 8px;">
+          <input type="text" id="manualEan" placeholder="e.g., 0012000123456" style="flex: 1;">
+          <button type="button" onclick="searchBarcode()" class="button">Search</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Barcode Lookup Result -->
+    <div id="resultContainer" style="display: none; background: var(--muted); padding: 16px; border-radius: 4px; margin-bottom: 24px;">
+      <div id="resultContent"></div>
+    </div>
+
+    <!-- Error Message -->
+    <div id="errorContainer" style="display: none; background: #fee; color: #c00; padding: 12px; border-radius: 4px; margin-bottom: 24px;">
+      <div id="errorMessage"></div>
+    </div>
+
+    <!-- Recently Scanned -->
+    {% if history %}
+    <div>
+      <h3>Recently Scanned</h3>
+      <div style="display: grid; gap: 8px;">
+        {% for item in history %}
+        <div style="background: var(--muted); padding: 12px; border-radius: 4px; display: flex; justify-content: space-between; align-items: center;">
+          <div>
+            <div style="font-weight: 600;">{{ item.food_name }}</div>
+            <div style="font-size: 12px; color: var(--muted);">EAN: {{ item.ean_code }} · Scanned {{ item.scan_count }}x</div>
+          </div>
+          <button type="button" onclick="quickAdd('{{ item.fdc_id }}', '{{ item.food_name }}')" class="button" style="padding: 6px 12px; font-size: 12px;">Add</button>
+        </div>
+        {% endfor %}
+      </div>
+    </div>
+    {% else %}
+    <p class="list-empty">No recently scanned items.</p>
+    {% endif %}
+
+  </section>
+</main>
+
+<script>
+async function searchBarcode() {
+  const ean = document.getElementById('manualEan').value.trim();
+  if (!ean) {
+    showError('Please enter an EAN code');
+    return;
+  }
+
+  document.getElementById('resultContainer').style.display = 'none';
+  document.getElementById('errorContainer').style.display = 'none';
+
+  try {
+    const response = await fetch(`/barcode/search?ean=${encodeURIComponent(ean)}`);
+    const data = await response.json();
+
+    if (!response.ok) {
+      showError(data.error || 'Search failed');
+      return;
+    }
+
+    displayResult(data);
+  } catch (err) {
+    showError('Network error: ' + err.message);
+  }
+}
+
+function displayResult(data) {
+  const resultHtml = `
+    <h3>${data.food_name}</h3>
+    ${data.brand ? `<p style="color: var(--muted); margin: 4px 0;">${data.brand}</p>` : ''}
+    <div style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; margin: 12px 0;">
+      <div style="background: white; padding: 8px; border-radius: 4px; text-align: center;">
+        <div style="font-size: 11px; color: var(--muted);">Calories</div>
+        <div style="font-size: 16px; font-weight: 600;">${Math.round(data.calories || 0)}</div>
+      </div>
+      <div style="background: white; padding: 8px; border-radius: 4px; text-align: center;">
+        <div style="font-size: 11px; color: var(--muted);">Protein</div>
+        <div style="font-size: 16px; font-weight: 600;">${(data.protein_g || 0).toFixed(1)}g</div>
+      </div>
+      <div style="background: white; padding: 8px; border-radius: 4px; text-align: center;">
+        <div style="font-size: 11px; color: var(--muted);">Carbs</div>
+        <div style="font-size: 16px; font-weight: 600;">${(data.carbs_g || 0).toFixed(1)}g</div>
+      </div>
+      <div style="background: white; padding: 8px; border-radius: 4px; text-align: center;">
+        <div style="font-size: 11px; color: var(--muted);">Fat</div>
+        <div style="font-size: 16px; font-weight: 600;">${(data.fat_g || 0).toFixed(1)}g</div>
+      </div>
+    </div>
+    <div style="display: flex; gap: 8px; margin-top: 16px;">
+      <form method="get" action="/foods/log/${data.fdc_id}" style="flex: 1;">
+        <button type="submit" class="button" style="width: 100%;">Log</button>
+      </form>
+    </div>
+    ${data.from_cache ? '<p style="font-size: 12px; color: var(--muted); margin-top: 8px;">✓ From cache (${data.scan_count} scans)</p>' : ''}
+  `;
+
+  document.getElementById('resultContent').innerHTML = resultHtml;
+  document.getElementById('resultContainer').style.display = 'block';
+}
+
+function showError(message) {
+  document.getElementById('errorMessage').textContent = message;
+  document.getElementById('errorContainer').style.display = 'block';
+}
+
+function quickAdd(fdcId, foodName) {
+  window.location.href = `/foods/log/${fdcId}`;
+}
+
+// Allow Enter key in EAN input
+document.getElementById('manualEan').addEventListener('keypress', (e) => {
+  if (e.key === 'Enter') searchBarcode();
+});
+</script>
+{% endblock %}

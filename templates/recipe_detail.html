@@ -1,0 +1,104 @@
+{% extends "base.html" %}
+
+{% block body %}
+<main>
+  <section class="card">
+    <div class="card-header">
+      <h2>{{ recipe.name }}</h2>
+      {% if recipe.description %}<p class="subtitle">{{ recipe.description }}</p>{% endif %}
+    </div>
+
+    <!-- Macro Summary -->
+    <div class="grid" style="grid-template-columns: repeat(4, 1fr); gap: 12px; margin-bottom: 24px;">
+      <div style="background: var(--muted); padding: 12px; border-radius: 4px; text-align: center;">
+        <div style="font-size: 11px; color: var(--muted);">Total</div>
+        <div style="font-size: 18px; font-weight: 600;">{{ recipe.total_calories | int }}</div>
+        <div style="font-size: 11px;">kcal</div>
+      </div>
+      <div style="background: var(--muted); padding: 12px; border-radius: 4px; text-align: center;">
+        <div style="font-size: 11px; color: var(--muted);">Protein</div>
+        <div style="font-size: 18px; font-weight: 600;">{{ recipe.total_protein_g | round(1) }}</div>
+        <div style="font-size: 11px;">g</div>
+      </div>
+      <div style="background: var(--muted); padding: 12px; border-radius: 4px; text-align: center;">
+        <div style="font-size: 11px; color: var(--muted);">Carbs</div>
+        <div style="font-size: 18px; font-weight: 600;">{{ recipe.total_carbs_g | round(1) }}</div>
+        <div style="font-size: 11px;">g</div>
+      </div>
+      <div style="background: var(--muted); padding: 12px; border-radius: 4px; text-align: center;">
+        <div style="font-size: 11px; color: var(--muted);">Fat</div>
+        <div style="font-size: 18px; font-weight: 600;">{{ recipe.total_fat_g | round(1) }}</div>
+        <div style="font-size: 11px;">g</div>
+      </div>
+    </div>
+
+    <!-- Per Serving -->
+    <div style="background: var(--muted); padding: 16px; border-radius: 4px; margin-bottom: 24px;">
+      <h3>Per Serving (÷ {{ recipe.servings }})</h3>
+      <div class="grid" style="grid-template-columns: repeat(4, 1fr); gap: 12px;">
+        <div>
+          <div style="font-size: 12px; color: var(--muted);">Calories</div>
+          <div style="font-size: 16px; font-weight: 600;">{{ recipe.per_serving_calories | int }}</div>
+        </div>
+        <div>
+          <div style="font-size: 12px; color: var(--muted);">Protein</div>
+          <div style="font-size: 16px; font-weight: 600;">{{ recipe.per_serving_protein_g | round(1) }}g</div>
+        </div>
+        <div>
+          <div style="font-size: 12px; color: var(--muted);">Carbs</div>
+          <div style="font-size: 16px; font-weight: 600;">{{ recipe.per_serving_carbs_g | round(1) }}g</div>
+        </div>
+        <div>
+          <div style="font-size: 12px; color: var(--muted);">Fat</div>
+          <div style="font-size: 16px; font-weight: 600;">{{ recipe.per_serving_fat_g | round(1) }}g</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Ingredients -->
+    <h3>Ingredients</h3>
+    {% if recipe.ingredients %}
+    <table style="width: 100%; margin-bottom: 24px; border-collapse: collapse;">
+      <thead>
+        <tr style="border-bottom: 2px solid var(--muted);">
+          <th style="text-align: left; padding: 12px 0;">Food</th>
+          <th style="text-align: right; padding: 12px;">Qty (g)</th>
+          <th style="text-align: right; padding: 12px;">Cal</th>
+          <th style="text-align: right; padding: 12px;">Protein</th>
+          <th style="text-align: right; padding: 12px;">Carbs</th>
+          <th style="text-align: right; padding: 12px;">Fat</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for ing in recipe.ingredients %}
+        <tr style="border-bottom: 1px solid var(--muted);">
+          <td style="padding: 12px 0;">{{ ing.food_name }}</td>
+          <td style="text-align: right; padding: 12px;">{{ ing.quantity_g | round(1) }}</td>
+          <td style="text-align: right; padding: 12px;">{{ (ing.quantity_g / 100 * 100) | int }}</td>
+          <td style="text-align: right; padding: 12px;">—</td>
+          <td style="text-align: right; padding: 12px;">—</td>
+          <td style="text-align: right; padding: 12px;">—</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% else %}
+    <p class="list-empty">No ingredients added yet.</p>
+    {% endif %}
+
+    <!-- Actions -->
+    <div class="actions">
+      <form method="post" action="{{ url_for('recipe_log', recipe_id=recipe.id) }}" style="display: flex; gap: 8px;">
+        <input type="number" name="servings" value="1" min="0.1" step="0.5" placeholder="Servings" style="width: 80px;" required>
+        <button type="submit" class="button">Log Recipe</button>
+      </form>
+      <a href="{{ url_for('recipe_edit', recipe_id=recipe.id) }}" class="button button-secondary">Edit</a>
+      <form method="post" action="{{ url_for('recipe_delete', recipe_id=recipe.id) }}" style="display: inline;" onsubmit="return confirm('Delete recipe?');">
+        <button type="submit" class="button button-secondary">Delete</button>
+      </form>
+      <a href="{{ url_for('recipes_list') }}" class="button button-secondary">Back</a>
+    </div>
+
+  </section>
+</main>
+{% endblock %}

@@ -1,0 +1,178 @@
+{% extends "base.html" %}
+
+{% block body %}
+<main>
+  <section class="card">
+    <div class="card-header">
+      <h2>{% if recipe %}Edit Recipe{% else %}Create Recipe{% endif %}</h2>
+    </div>
+
+    <form method="post" id="recipeForm">
+      <div>
+        <label for="name">Recipe Name *</label>
+        <input type="text" id="name" name="name" required value="{% if recipe %}{{ recipe.name }}{% endif %}" placeholder="e.g. Chicken Stir-Fry">
+      </div>
+
+      <div>
+        <label for="description">Description</label>
+        <input type="text" id="description" name="description" value="{% if recipe %}{{ recipe.description or '' }}{% endif %}" placeholder="Optional description">
+      </div>
+
+      <div>
+        <label for="servings">Servings</label>
+        <input type="number" id="servings" name="servings" min="0.5" step="0.5" value="{% if recipe %}{{ recipe.servings }}{% else %}1{% endif %}" required>
+      </div>
+
+      <div>
+        <h3>Ingredients</h3>
+        <div id="ingredientsList">
+          {% if recipe and recipe.ingredients %}
+            {% for ingredient in recipe.ingredients %}
+            <div class="ingredient-row" style="display: grid; grid-template-columns: 1fr 100px 80px repeat(2, 60px); gap: 8px; margin-bottom: 12px; padding: 12px; background: var(--muted); border-radius: 4px;">
+              <input type="text" class="ingredient-name" value="{{ ingredient.food_name }}" placeholder="Food name" readonly>
+              <input type="number" class="ingredient-qty" value="{{ ingredient.quantity_g }}" min="0.1" step="0.1" placeholder="Qty (g)">
+              <input type="hidden" class="ingredient-food-id" value="{{ ingredient.food_id or 0 }}">
+              <input type="text" class="ingredient-cal" value="" placeholder="Cal" readonly>
+              <button type="button" class="btn-remove" onclick="removeIngredient(this)">Remove</button>
+            </div>
+            {% endfor %}
+          {% endif %}
+        </div>
+
+        <div style="display: grid; grid-template-columns: 1fr 100px 80px repeat(2, 60px); gap: 8px; margin-top: 12px;">
+          <input type="text" id="newFoodName" placeholder="Search food..." autocomplete="off">
+          <input type="number" id="newQty" placeholder="Qty (g)" min="0.1" step="0.1" value="100">
+          <input type="hidden" id="newFoodId" value="0">
+          <button type="button" onclick="addIngredient()">Add →</button>
+          <div></div>
+        </div>
+        <div id="foodSuggestions" style="position: absolute; background: white; border: 1px solid var(--muted); max-height: 200px; overflow-y: auto; z-index: 10; width: 200px; display: none;"></div>
+      </div>
+
+      <div style="background: var(--muted); padding: 16px; border-radius: 4px; margin-top: 24px;">
+        <h3>Totals</h3>
+        <div style="display: grid; grid-template-columns: repeat(2, 1fr); gap: 12px;">
+          <div>
+            <div style="font-size: 12px; color: var(--muted);">Calories</div>
+            <div style="font-size: 20px; font-weight: 600;" id="totalCal">0</div>
+          </div>
+          <div>
+            <div style="font-size: 12px; color: var(--muted);">Per Serving</div>
+            <div style="font-size: 14px;" id="perServing">0 cal</div>
+          </div>
+          <div>
+            <div style="font-size: 12px; color: var(--muted);">Protein</div>
+            <div style="font-size: 18px;" id="totalPro">0g</div>
+          </div>
+          <div>
+            <div style="font-size: 12px; color: var(--muted);">Carbs / Fat</div>
+            <div style="font-size: 14px;" id="totalCF">0g / 0g</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="actions" style="margin-top: 24px;">
+        <button type="submit">Save Recipe</button>
+        <a href="{{ url_for('recipes_list') }}" class="button button-secondary">Cancel</a>
+      </div>
+    </form>
+  </section>
+</main>
+
+<script>
+let foodCache = {};
+
+async function addIngredient() {
+  const name = document.getElementById('newFoodName').value.trim();
+  const qty = parseFloat(document.getElementById('newQty').value) || 100;
+  const foodId = parseInt(document.getElementById('newFoodId').value) || 0;
+
+  if (!name) return;
+
+  const row = document.createElement('div');
+  row.className = 'ingredient-row';
+  row.style.cssText = 'display: grid; grid-template-columns: 1fr 100px 80px repeat(2, 60px); gap: 8px; margin-bottom: 12px; padding: 12px; background: var(--muted); border-radius: 4px;';
+  row.innerHTML = `
+    <input type="text" class="ingredient-name" value="${name}" placeholder="Food name" readonly>
+    <input type="number" class="ingredient-qty" value="${qty}" min="0.1" step="0.1" placeholder="Qty (g)">
+    <input type="hidden" class="ingredient-food-id" value="${foodId}">
+    <input type="text" class="ingredient-cal" value="" placeholder="Cal" readonly>
+    <button type="button" class="btn-remove" onclick="removeIngredient(this)">Remove</button>
+  `;
+
+  document.getElementById('ingredientsList').appendChild(row);
+  document.getElementById('newFoodName').value = '';
+  document.getElementById('newQty').value = '100';
+  document.getElementById('newFoodId').value = '0';
+  document.getElementById('foodSuggestions').style.display = 'none';
+
+  updateTotals();
+}
+
+function removeIngredient(btn) {
+  btn.closest('.ingredient-row').remove();
+  updateTotals();
+}
+
+function updateTotals() {
+  const rows = document.querySelectorAll('.ingredient-row');
+  const servings = parseFloat(document.getElementById('servings').value) || 1;
+
+  let totalCal = 0, totalPro = 0, totalCarbs = 0, totalFat = 0;
+
+  rows.forEach(row => {
+    const cal = parseFloat(row.querySelector('.ingredient-cal').value) || 0;
+    totalCal += cal;
+  });
+
+  document.getElementById('totalCal').textContent = Math.round(totalCal);
+  document.getElementById('perServing').textContent = Math.round(totalCal / servings) + ' cal';
+}
+
+document.getElementById('newFoodName').addEventListener('input', async (e) => {
+  const query = e.target.value.trim();
+  if (query.length < 2) {
+    document.getElementById('foodSuggestions').style.display = 'none';
+    return;
+  }
+
+  // Simple client-side suggestion (in production, would call /foods/search)
+  document.getElementById('foodSuggestions').style.display = 'none';
+});
+
+// Update totals when servings change
+document.getElementById('servings').addEventListener('change', updateTotals);
+
+// On form submit, create hidden inputs for ingredients
+document.getElementById('recipeForm').addEventListener('submit', (e) => {
+  const rows = document.querySelectorAll('.ingredient-row');
+  let idx = 0;
+  rows.forEach(row => {
+    const form = e.target;
+    const name = row.querySelector('.ingredient-name').value;
+    const qty = row.querySelector('.ingredient-qty').value;
+    const foodId = row.querySelector('.ingredient-food-id').value;
+
+    const nameInput = document.createElement('input');
+    nameInput.type = 'hidden';
+    nameInput.name = `ingredient_${idx}_name`;
+    nameInput.value = name;
+    form.appendChild(nameInput);
+
+    const qtyInput = document.createElement('input');
+    qtyInput.type = 'hidden';
+    qtyInput.name = `ingredient_${idx}_qty`;
+    qtyInput.value = qty;
+    form.appendChild(qtyInput);
+
+    const idInput = document.createElement('input');
+    idInput.type = 'hidden';
+    idInput.name = `ingredient_${idx}_food_id`;
+    idInput.value = foodId;
+    form.appendChild(idInput);
+
+    idx++;
+  });
+});
+</script>
+{% endblock %}

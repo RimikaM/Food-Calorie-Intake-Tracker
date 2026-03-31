@@ -371,3 +371,70 @@ class TestCalorieGoal:
         m.set_setting("calorie_goal", "2000", user_id=user.id)
         m.set_setting("calorie_goal", "2500", user_id=user.id)
         assert m.get_calorie_goal(user_id=user.id) == 2500
+
+
+class TestBarcodeScanning:
+    def test_add_barcode_mapping(self, user):
+        """Test adding a barcode mapping."""
+        result = m.add_barcode_mapping("0012000123456", 999, "Test Food")
+        assert result is True
+
+    def test_lookup_barcode_not_cached(self, user):
+        """Test lookup returns None for uncached barcode."""
+        result = m.lookup_barcode("0012000999999", user.id)
+        assert result is None
+
+    def test_lookup_barcode_cached(self, user):
+        """Test barcode lookup from cache."""
+        m.add_barcode_mapping("0012000123456", 999, "Test Food")
+        result = m.lookup_barcode("0012000123456", user.id)
+        assert result is not None
+        assert result["ean_code"] == "0012000123456"
+        assert result["fdc_id"] == 999
+        assert result["food_name"] == "Test Food"
+        assert result["from_cache"] is True
+
+    def test_barcode_scan_count_increments(self, user):
+        """Test that scan count increments on repeated lookups."""
+        m.add_barcode_mapping("0012000123456", 999, "Test Food")
+        result1 = m.lookup_barcode("0012000123456", user.id)
+        assert result1["scan_count"] == 2  # Starts at 1, then increments to 2
+
+        result2 = m.lookup_barcode("0012000123456", user.id)
+        assert result2["scan_count"] == 3  # Increments again
+
+    def test_get_barcode_history(self, user):
+        """Test retrieving barcode history."""
+        m.add_barcode_mapping("0012000111111", 999, "Food A")
+        m.add_barcode_mapping("0012000222222", 998, "Food B")
+
+        m.lookup_barcode("0012000111111", user.id)
+        m.lookup_barcode("0012000222222", user.id)
+
+        history = m.get_barcode_history(user.id, limit=10)
+        assert len(history) >= 2
+        assert any(item["ean_code"] == "0012000111111" for item in history)
+        assert any(item["ean_code"] == "0012000222222" for item in history)
+
+    def test_barcode_history_ordered_by_last_scanned(self, user):
+        """Test barcode history is ordered by last_scanned descending."""
+        m.add_barcode_mapping("0012000111111", 999, "Food A")
+        m.add_barcode_mapping("0012000222222", 998, "Food B")
+
+        m.lookup_barcode("0012000111111", user.id)
+        import time
+        time.sleep(0.01)
+        m.lookup_barcode("0012000222222", user.id)
+
+        history = m.get_barcode_history(user.id, limit=10)
+        # Most recent should come first
+        assert history[0]["ean_code"] == "0012000222222"
+
+    def test_barcode_history_limit(self, user):
+        """Test barcode history respects limit parameter."""
+        for i in range(5):
+            m.add_barcode_mapping(f"001200010{i:05d}", 999 - i, f"Food {i}")
+            m.lookup_barcode(f"001200010{i:05d}", user.id)
+
+        history = m.get_barcode_history(user.id, limit=3)
+        assert len(history) == 3

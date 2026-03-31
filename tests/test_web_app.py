@@ -461,3 +461,48 @@ class TestSettings:
         other = m.create_user("other_cfg", "otherpass4")
         client.post("/settings", data={"calorie_goal": "1800"})
         assert m.get_calorie_goal(user_id=other.id) is None
+
+
+# ---------------------------------------------------------------------------
+# /barcode
+# ---------------------------------------------------------------------------
+
+class TestBarcodeRoutes:
+    def test_barcode_requires_login(self, client):
+        assert client.get("/barcode").status_code == 302
+
+    def test_barcode_renders(self, logged_in_client):
+        client, _ = logged_in_client
+        resp = client.get("/barcode")
+        assert resp.status_code == 200
+        assert b"Barcode Scanner" in resp.data
+
+    def test_barcode_search_missing_ean(self, logged_in_client):
+        client, _ = logged_in_client
+        resp = client.get("/barcode/search")
+        assert resp.status_code == 400
+        assert b"required" in resp.data.lower()
+
+    def test_barcode_search_cached(self, logged_in_client):
+        client, user = logged_in_client
+        # Add barcode to cache
+        m.add_barcode_mapping("0012000123456", 999, "Test Food")
+        resp = client.get("/barcode/search?ean=0012000123456")
+        assert resp.status_code == 200
+        data = resp.get_json()
+        assert data["success"] is True
+        assert data["ean_code"] == "0012000123456"
+        assert data["food_name"] == "Test Food"
+        assert data["from_cache"] is True
+
+    def test_barcode_history_requires_login(self, client):
+        assert client.get("/barcode/history").status_code == 302
+
+    def test_barcode_history_renders(self, logged_in_client):
+        client, user = logged_in_client
+        m.add_barcode_mapping("0012000123456", 999, "Test Food")
+        m.lookup_barcode("0012000123456", user.id)
+
+        resp = client.get("/barcode/history")
+        assert resp.status_code == 200
+        assert b"Scanned" in resp.data or b"Recently" in resp.data

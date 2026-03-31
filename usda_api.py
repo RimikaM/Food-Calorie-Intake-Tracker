@@ -124,6 +124,69 @@ def search_foods(query: str, page_size: int = 15) -> UsdaSearchResponse:
     return UsdaSearchResponse(foods=results, status_code=resp.status_code)
 
 
+def search_foods_by_barcode(ean_code: str) -> UsdaSearchResponse:
+    """
+    Search USDA FoodData Central for a food by barcode (EAN/UPC code).
+    Falls back to text search if barcode lookup fails.
+    """
+    api_key = _get_api_key()
+    if not api_key or not ean_code.strip():
+        return UsdaSearchResponse(
+            foods=[],
+            error="Missing USDA_FDC_API_KEY or no barcode provided.",
+        )
+
+    # Try barcode/UPC lookup first
+    url = "https://api.nal.usda.gov/fdc/v1/foods/search"
+    params = {
+        "api_key": api_key,
+        "query": f"gtinUpc:{ean_code.strip()}",
+        "pageSize": 10,
+    }
+
+    try:
+        resp = requests.get(url, params=params, timeout=6)
+    except requests.RequestException:
+        return UsdaSearchResponse(
+            foods=[],
+            error="Network error calling USDA FoodData Central.",
+        )
+
+    if resp.status_code != 200:
+        return UsdaSearchResponse(
+            foods=[],
+            error=f"USDA barcode search failed (HTTP {resp.status_code}).",
+            status_code=resp.status_code,
+        )
+
+    payload = resp.json()
+    foods = payload.get("foods") or []
+    results: List[UsdaFood] = []
+
+    for f in foods:
+        fdc_id = f.get("fdcId")
+        if not fdc_id:
+            continue
+
+        description = f.get("description") or "Unknown food"
+        brand = f.get("brandOwner") or f.get("brandName")
+        calories, protein, carbs, fat = _extract_macros(f.get("foodNutrients"))
+
+        results.append(
+            UsdaFood(
+                fdc_id=int(fdc_id),
+                description=description,
+                brand=brand,
+                calories=calories,
+                protein_g=protein,
+                carbs_g=carbs,
+                fat_g=fat,
+            )
+        )
+
+    return UsdaSearchResponse(foods=results, status_code=resp.status_code)
+
+
 def _cli_smoke_test() -> int:
     import sys
 

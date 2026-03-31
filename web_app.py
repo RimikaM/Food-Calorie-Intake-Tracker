@@ -52,8 +52,19 @@ from main import (
     get_wellness_goals,
     set_wellness_goal,
     delete_wellness_log,
+    create_recipe,
+    add_recipe_ingredient,
+    get_recipes,
+    get_recipe_by_id,
+    update_recipe,
+    delete_recipe,
+    calculate_recipe_macros,
+    log_recipe,
+    lookup_barcode,
+    add_barcode_mapping,
+    get_barcode_history,
 )
-from usda_api import UsdaFood, UsdaSearchResponse, search_foods
+from usda_api import UsdaFood, UsdaSearchResponse, search_foods, search_foods_by_barcode
 
 
 app = Flask(__name__)
@@ -719,6 +730,180 @@ def delete_wellness(log_id: int):
     """Delete wellness log entry."""
     delete_wellness_log(current_user.id, log_id)
     return redirect(url_for("wellness_view"))
+
+
+# ===== Feature 9: Recipe Builder Routes =====
+
+
+@app.route("/recipes", methods=["GET"])
+@login_required
+def recipes_list():
+    """Show all recipes."""
+    recipes = get_recipes(current_user.id)
+    return render_template("recipes.html", recipes=recipes)
+
+
+@app.route("/recipes/new", methods=["GET"])
+@login_required
+def recipes_new():
+    """Show create recipe form."""
+    return render_template("recipe_form.html", recipe=None)
+
+
+@app.route("/recipes", methods=["POST"])
+@login_required
+def recipes_create():
+    """Create new recipe."""
+    name = request.form.get("name", "").strip()
+    description = request.form.get("description", "").strip() or None
+    servings_str = request.form.get("servings", "1").strip()
+
+    if not name:
+        return redirect(url_for("recipes_list"))
+
+    try:
+        servings = float(servings_str) if servings_str else 1.0
+        if servings <= 0:
+            servings = 1.0
+    except ValueError:
+        servings = 1.0
+
+    recipe_id = create_recipe(current_user.id, name, description, servings)
+    return redirect(url_for("recipe_detail", recipe_id=recipe_id))
+
+
+@app.route("/recipes/<int:recipe_id>", methods=["GET"])
+@login_required
+def recipe_detail(recipe_id: int):
+    """Show recipe details."""
+    recipe = get_recipe_by_id(recipe_id, current_user.id)
+    if not recipe:
+        return redirect(url_for("recipes_list"))
+    return render_template("recipe_detail.html", recipe=recipe)
+
+
+@app.route("/recipes/<int:recipe_id>/edit", methods=["GET"])
+@login_required
+def recipe_edit(recipe_id: int):
+    """Show edit recipe form."""
+    recipe = get_recipe_by_id(recipe_id, current_user.id)
+    if not recipe:
+        return redirect(url_for("recipes_list"))
+    return render_template("recipe_form.html", recipe=recipe)
+
+
+@app.route("/recipes/<int:recipe_id>", methods=["POST"])
+@login_required
+def recipe_update(recipe_id: int):
+    """Update recipe."""
+    recipe = get_recipe_by_id(recipe_id, current_user.id)
+    if not recipe:
+        return redirect(url_for("recipes_list"))
+
+    name = request.form.get("name", "").strip()
+    description = request.form.get("description", "").strip() or None
+    servings_str = request.form.get("servings", "1").strip()
+
+    if not name:
+        return redirect(url_for("recipe_detail", recipe_id=recipe_id))
+
+    try:
+        servings = float(servings_str) if servings_str else 1.0
+        if servings <= 0:
+            servings = 1.0
+    except ValueError:
+        servings = 1.0
+
+    update_recipe(recipe_id, current_user.id, name, description, servings)
+    return redirect(url_for("recipe_detail", recipe_id=recipe_id))
+
+
+@app.route("/recipes/<int:recipe_id>/delete", methods=["POST"])
+@login_required
+def recipe_delete(recipe_id: int):
+    """Delete recipe."""
+    delete_recipe(recipe_id, current_user.id)
+    return redirect(url_for("recipes_list"))
+
+
+@app.route("/recipes/<int:recipe_id>/log", methods=["POST"])
+@login_required
+def recipe_log(recipe_id: int):
+    """Log recipe as food entry."""
+    servings_str = request.form.get("servings", "1").strip()
+    try:
+        servings = float(servings_str)
+        if servings <= 0:
+            servings = 1.0
+    except ValueError:
+        servings = 1.0
+
+    log_recipe(recipe_id, current_user.id, servings)
+    return redirect(url_for("index"))
+
+
+# Feature 10: Barcode Scanning
+
+@app.route("/barcode")
+@login_required
+def barcode():
+    """Show barcode scanner interface."""
+    history = get_barcode_history(current_user.id, limit=10)
+    return render_template("barcode.html", history=history)
+
+
+@app.route("/barcode/search", methods=["GET"])
+@login_required
+def barcode_search():
+    """Search for food by EAN code (AJAX endpoint)."""
+    ean_code = request.args.get("ean", "").strip()
+    if not ean_code:
+        return {"error": "EAN code required"}, 400
+
+    # Try cached lookup first
+    cached = lookup_barcode(ean_code, current_user.id)
+    if cached:
+        return {
+            "success": True,
+            "ean_code": cached["ean_code"],
+            "fdc_id": cached["fdc_id"],
+            "food_name": cached["food_name"],
+            "scan_count": cached["scan_count"],
+            "from_cache": True,
+        }
+
+    # Query USDA API
+    result = search_foods_by_barcode(ean_code)
+    if result.error:
+        return {"error": result.error}, 400
+
+    if not result.foods:
+        return {"error": f"No food found for barcode {ean_code}"}, 404
+
+    # Return first match and cache it
+    food = result.foods[0]
+    add_barcode_mapping(ean_code, food.fdc_id, food.description)
+
+    return {
+        "success": True,
+        "ean_code": ean_code,
+        "fdc_id": food.fdc_id,
+        "food_name": food.description,
+        "brand": food.brand,
+        "calories": food.calories,
+        "protein_g": food.protein_g,
+        "carbs_g": food.carbs_g,
+        "fat_g": food.fat_g,
+        "from_cache": False,
+    }
+
+
+@app.route("/barcode/history")
+@login_required
+def barcode_history():
+    """Show recently scanned barcodes."""
+    history = get_barcode_history(current_user.id, limit=20)
+    return render_template("barcode_history.html", history=history)
 
 
 if __name__ == "__main__":
