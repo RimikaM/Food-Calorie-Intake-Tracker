@@ -1,0 +1,44 @@
+{% extends "base.html" %}
+
+{% block body %}
+<main>
+  <section class="card">
+    <div class="card-header">
+      <h2>Notifications</h2>
+      <p class="subtitle">Your goal progress alerts</p>
+    </div>
+
+    {% if notifications %}
+    <div style="margin-bottom: 16px;">
+      <form method="post" action="{{ url_for('mark_all_notifications_read') }}" style="display: inline;">
+        <button type="submit" class="button button-secondary" style="padding: 6px 12px; font-size: 12px;">Mark All as Read</button>
+      </form>
+    </div>
+
+    <div style="display: grid; gap: 12px;">
+      {% for notif in notifications %}
+      <div style="background: var(--muted); padding: 16px; border-radius: 4px; display: flex; justify-content: space-between; align-items: flex-start; border-left: 4px solid {% if notif.event_type == 'calorie_goal_reached' %}#0a0{% elif notif.event_type == 'protein_low' %}#f90{% elif notif.event_type == 'water_low' %}#09f{% elif notif.event_type == 'streak_7_days' %}#f00{% else %}#999{% endif %};">
+        <div style="flex: 1;">
+          <div style="font-weight: 600; margin-bottom: 4px;">{{ notif.title }}</div>
+          {% if notif.message %}
+          <div style="font-size: 14px; margin-bottom: 8px;">{{ notif.message }}</div>
+          {% endif %}
+          <div style="font-size: 12px; color: var(--muted);">
+            {{ notif.triggered_at[:10] }} at {{ notif.triggered_at[11:16] }}
+            {% if notif.read %}<span style="margin-left: 8px;">✓ Read</span>{% endif %}
+          </div>
+        </div>
+        <form method="post" action="{{ url_for('mark_notification_read', notification_id=notif.id) }}" style="margin-left: 16px;">
+          <button type="submit" class="button" style="padding: 6px 12px; font-size: 12px;">View</button>
+        </form>
+      </div>
+      {% endfor %}
+    </div>
+
+    {% else %}
+    <p class="list-empty">✓ All caught up! No notifications.</p>
+    {% endif %}
+
+  </section>
+</main>
+{% endblock %}

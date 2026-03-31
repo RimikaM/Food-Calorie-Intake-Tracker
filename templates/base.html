@@ -317,6 +317,9 @@
           <a href="{{ url_for('settings_view') }}" class="{% if active == 'settings' %}active{% endif %}"
             >Settings</a
           >
+          <a href="{{ url_for('notifications_list') }}" class="{% if active == 'notifications' %}active{% endif %}"
+            >🔔 Notifications</a
+          >
           {% if current_user.is_authenticated %}
           <span style="font-size:0.8rem;color:var(--muted);padding:4px 6px">{{ current_user.username }}</span>
           <a href="{{ url_for('logout') }}">Log out</a>

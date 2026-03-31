@@ -272,6 +272,18 @@ def init_db() -> None:
                 scan_count INTEGER DEFAULT 1
             );
             """,
+            """
+            CREATE TABLE IF NOT EXISTS notifications (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL REFERENCES users(id),
+                event_type TEXT NOT NULL,
+                title TEXT NOT NULL,
+                message TEXT,
+                triggered_at TEXT NOT NULL,
+                read BOOLEAN DEFAULT FALSE,
+                action_url TEXT
+            );
+            """,
         ]
 
         cur = conn.cursor()
@@ -1961,6 +1973,203 @@ def import_wellness_from_csv(user_id: int, csv_lines: List[str]) -> tuple[int, L
         close_connection(conn)
         errors.append(f"CSV parsing error: {str(e)}")
         return count, errors
+
+
+# Feature 12: Goal Progress Notifications
+
+def create_notification(user_id: int, event_type: str, title: str, message: str = "", action_url: str = "") -> bool:
+    """Create a new notification for user."""
+    conn = normalize_connection(get_connection())
+    try:
+        cur = conn.cursor()
+        now = datetime.now().isoformat()
+
+        safe_execute(
+            cur,
+            """
+            INSERT INTO notifications (user_id, event_type, title, message, triggered_at, read, action_url)
+            VALUES (%s, %s, %s, %s, %s, FALSE, %s)
+            """,
+            (user_id, event_type, title, message, now, action_url),
+            conn,
+        )
+        close_connection(conn)
+        return True
+
+    except (sqlite3.Error, psycopg2.Error) as e:
+        close_connection(conn)
+        print(f"Error creating notification: {e}")
+        return False
+
+
+def get_unread_notifications(user_id: int) -> List[dict]:
+    """Get unread notifications for user."""
+    conn = normalize_connection(get_connection())
+    try:
+        cur = conn.cursor()
+
+        safe_execute(
+            cur,
+            """
+            SELECT id, event_type, title, message, triggered_at, action_url
+            FROM notifications
+            WHERE user_id = %s AND read = FALSE
+            ORDER BY triggered_at DESC
+            LIMIT 10
+            """,
+            (user_id,),
+            conn,
+        )
+        rows = cur.fetchall()
+
+        result = []
+        for row in rows:
+            result.append({
+                "id": row[0],
+                "event_type": row[1],
+                "title": row[2],
+                "message": row[3],
+                "triggered_at": row[4],
+                "action_url": row[5],
+            })
+
+        close_connection(conn)
+        return result
+
+    except (sqlite3.Error, psycopg2.Error) as e:
+        close_connection(conn)
+        print(f"Error fetching notifications: {e}")
+        return []
+
+
+def mark_notification_read(notification_id: int, user_id: int) -> bool:
+    """Mark single notification as read (with ownership check)."""
+    conn = normalize_connection(get_connection())
+    try:
+        cur = conn.cursor()
+
+        # Verify ownership
+        safe_execute(
+            cur,
+            "SELECT id FROM notifications WHERE id = %s AND user_id = %s",
+            (notification_id, user_id),
+            conn,
+        )
+        if not cur.fetchone():
+            close_connection(conn)
+            return False
+
+        # Mark as read
+        safe_execute(
+            cur,
+            "UPDATE notifications SET read = TRUE WHERE id = %s",
+            (notification_id,),
+            conn,
+        )
+        close_connection(conn)
+        return True
+
+    except (sqlite3.Error, psycopg2.Error) as e:
+        close_connection(conn)
+        print(f"Error marking notification as read: {e}")
+        return False
+
+
+def mark_all_notifications_read(user_id: int) -> bool:
+    """Mark all notifications as read for user."""
+    conn = normalize_connection(get_connection())
+    try:
+        cur = conn.cursor()
+
+        safe_execute(
+            cur,
+            "UPDATE notifications SET read = TRUE WHERE user_id = %s",
+            (user_id,),
+            conn,
+        )
+        close_connection(conn)
+        return True
+
+    except (sqlite3.Error, psycopg2.Error) as e:
+        close_connection(conn)
+        print(f"Error marking all notifications as read: {e}")
+        return False
+
+
+def check_daily_goals_and_notify(user_id: int) -> None:
+    """Check user's daily goals and create notifications if needed."""
+    # Get today's summary
+    today = date.today()
+    summary = get_week_summary(user_id, end_date=today)
+
+    if not summary:
+        return
+
+    # Check calorie goal
+    calorie_goal = get_calorie_goal(user_id)
+    if calorie_goal and summary.get("total_calories", 0) >= calorie_goal:
+        create_notification(
+            user_id,
+            "calorie_goal_reached",
+            "🎉 Calorie Goal Hit!",
+            f"You've reached your daily goal of {calorie_goal} kcal",
+            "/",
+        )
+
+    # Check protein goal
+    protein_goal_str = get_setting("protein_goal_g", user_id=user_id)
+    if protein_goal_str:
+        try:
+            protein_goal = float(protein_goal_str)
+            protein_total = summary.get("total_protein_g", 0)
+            if protein_total < protein_goal * 0.8:
+                create_notification(
+                    user_id,
+                    "protein_low",
+                    "🥛 Protein Intake Low",
+                    f"You're at {protein_total:.0f}g, target is {protein_goal}g",
+                    "/insights",
+                )
+        except (ValueError, TypeError):
+            pass
+
+    # Check water goal (if wellness tracking is being used)
+    water_goal_str = get_setting("water_goal_ml", user_id=user_id)
+    if water_goal_str:
+        try:
+            water_goal = float(water_goal_str)
+            wellness = get_today_wellness_summary(user_id)
+            if wellness and wellness.get("total_water_ml", 0) < water_goal * 0.5:
+                create_notification(
+                    user_id,
+                    "water_low",
+                    "💧 Hydrate!",
+                    "You're behind on your water intake",
+                    "/wellness",
+                )
+        except (ValueError, TypeError):
+            pass
+
+    # Check logging streak
+    all_entries = fetch_all_entries(user_id)
+    if all_entries:
+        consecutive_days = 1
+        for i, entry in enumerate(all_entries[:-1]):
+            curr_date = datetime.fromisoformat(entry.eaten_at).date()
+            next_date = datetime.fromisoformat(all_entries[i + 1].eaten_at).date()
+            if (curr_date - next_date).days == 1:
+                consecutive_days += 1
+            else:
+                break
+
+        if consecutive_days == 7:
+            create_notification(
+                user_id,
+                "streak_7_days",
+                "🔥 7-Day Logging Streak!",
+                "You've logged food for 7 consecutive days!",
+                "/entries",
+            )
 
 
 def verify_password(user: User, password: str) -> bool:

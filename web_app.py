@@ -67,6 +67,11 @@ from main import (
     import_entries_from_csv,
     import_weight_from_csv,
     import_wellness_from_csv,
+    create_notification,
+    get_unread_notifications,
+    mark_notification_read,
+    mark_all_notifications_read,
+    check_daily_goals_and_notify,
 )
 from usda_api import UsdaFood, UsdaSearchResponse, search_foods, search_foods_by_barcode
 
@@ -982,6 +987,81 @@ def export_data():
     response.headers["Content-Disposition"] = f"attachment;filename=food_tracker_export_{date.today()}.json"
     response.headers["Content-Type"] = "application/json"
     return response
+
+
+# Feature 12: Goal Progress Notifications
+
+@app.route("/notifications")
+@login_required
+def notifications_list():
+    """Show all notifications."""
+    # Get all notifications (read and unread)
+    try:
+        conn = normalize_connection(get_connection())
+        cur = conn.cursor()
+        safe_execute(
+            cur,
+            """
+            SELECT id, event_type, title, message, triggered_at, read, action_url
+            FROM notifications
+            WHERE user_id = %s
+            ORDER BY triggered_at DESC
+            """,
+            (current_user.id,),
+            conn,
+        )
+        rows = cur.fetchall()
+        notifications_list = []
+        for row in rows:
+            notifications_list.append({
+                "id": row[0],
+                "event_type": row[1],
+                "title": row[2],
+                "message": row[3],
+                "triggered_at": row[4],
+                "read": bool(row[5]),
+                "action_url": row[6],
+            })
+        close_connection(conn)
+    except Exception:
+        notifications_list = []
+
+    return render_template("notifications.html", notifications=notifications_list)
+
+
+@app.route("/notifications/<int:notification_id>/mark-read", methods=["POST"])
+@login_required
+def mark_notif_read(notification_id: int):
+    """Mark notification as read and redirect to action URL if available."""
+    # First get the notification to check if it exists and has an action URL
+    try:
+        conn = normalize_connection(get_connection())
+        cur = conn.cursor()
+        safe_execute(
+            cur,
+            "SELECT action_url FROM notifications WHERE id = %s AND user_id = %s",
+            (notification_id, current_user.id),
+            conn,
+        )
+        row = cur.fetchone()
+        action_url = row[0] if row else "/"
+        close_connection(conn)
+    except Exception:
+        action_url = "/"
+
+    # Mark as read
+    mark_notification_read(notification_id, current_user.id)
+
+    return redirect(action_url or "/")
+
+
+@app.route("/notifications/mark-all-read", methods=["POST"])
+@login_required
+def mark_all_notifs_read():
+    """Mark all notifications as read."""
+    mark_all_notifications_read(current_user.id)
+    flash("All notifications marked as read", "success")
+    return redirect(url_for("notifications_list"))
 
 
 if __name__ == "__main__":

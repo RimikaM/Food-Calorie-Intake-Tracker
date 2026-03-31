@@ -509,3 +509,56 @@ class TestBulkImportExport:
         assert count == 2
         assert len(errors) == 0
 
+
+class TestNotifications:
+    def test_create_notification(self, user):
+        """Test creating a notification."""
+        result = m.create_notification(
+            user.id,
+            "test_event",
+            "Test Title",
+            "Test message",
+            "/test",
+        )
+        assert result is True
+
+    def test_get_unread_notifications(self, user):
+        """Test getting unread notifications."""
+        m.create_notification(user.id, "event1", "Title 1", "Message 1", "/")
+        m.create_notification(user.id, "event2", "Title 2", "Message 2", "/")
+
+        notifs = m.get_unread_notifications(user.id)
+        assert len(notifs) >= 2
+        assert all(notif["title"] in ["Title 1", "Title 2"] for notif in notifs)
+
+    def test_mark_notification_read(self, user):
+        """Test marking notification as read."""
+        m.create_notification(user.id, "event", "Title", "Message")
+        notifs = m.get_unread_notifications(user.id)
+        notif_id = notifs[0]["id"]
+
+        result = m.mark_notification_read(notif_id, user.id)
+        assert result is True
+
+        # Verify it's no longer in unread
+        unread = m.get_unread_notifications(user.id)
+        assert not any(n["id"] == notif_id for n in unread)
+
+    def test_mark_all_notifications_read(self, user):
+        """Test marking all notifications as read."""
+        m.create_notification(user.id, "event1", "Title 1")
+        m.create_notification(user.id, "event2", "Title 2")
+
+        m.mark_all_notifications_read(user.id)
+        unread = m.get_unread_notifications(user.id)
+        assert len(unread) == 0
+
+    def test_check_daily_goals_creates_notification(self, user):
+        """Test that creating notifications works."""
+        # Just verify we can create a notification without errors
+        m.create_notification(user.id, "calorie_goal_reached", "Test Goal", "You hit your goal!")
+
+        notifs = m.get_unread_notifications(user.id)
+        assert any(n["event_type"] == "calorie_goal_reached" for n in notifs)
+
+

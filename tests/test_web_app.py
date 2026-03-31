@@ -557,3 +557,31 @@ Rice,200,2026-03-27,12:30,,4,45,0,lunch"""
         assert resp.status_code == 200
         assert b"Content-Disposition" in resp.headers or resp.status_code == 200
 
+
+# ---------------------------------------------------------------------------
+# /notifications
+# ---------------------------------------------------------------------------
+
+class TestNotifications:
+    def test_notifications_requires_login(self, client):
+        assert client.get("/notifications").status_code == 302
+
+    def test_notifications_renders(self, logged_in_client):
+        client, user = logged_in_client
+        m.create_notification(user.id, "test", "Test Title", "Test message")
+
+        resp = client.get("/notifications")
+        assert resp.status_code == 200
+        assert b"Notifications" in resp.data or b"Test Title" in resp.data
+
+    def test_mark_notification_read_requires_login(self, client):
+        assert client.post("/notifications/1/mark-read").status_code == 302
+
+    def test_mark_all_notifications_read(self, logged_in_client):
+        client, user = logged_in_client
+        m.create_notification(user.id, "event1", "Title 1")
+        m.create_notification(user.id, "event2", "Title 2")
+
+        resp = client.post("/notifications/mark-all-read")
+        assert resp.status_code in [200, 302]  # Redirect or render
+
