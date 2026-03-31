@@ -1,0 +1,75 @@
+{% extends "base.html" %}
+
+{% block body %}
+<main>
+  <section class="card">
+    <div class="card-header">
+      <h2>Wellness Goals</h2>
+      <p class="subtitle">Configure your daily wellness targets</p>
+    </div>
+
+    <form method="post">
+      <div>
+        <label for="water_goal">Daily Water Goal (ml)</label>
+        <input
+          type="number"
+          id="water_goal"
+          name="water_goal_ml"
+          min="500"
+          step="100"
+          value="{{ goals.water_goal_ml | int }}"
+          placeholder="2000"
+        >
+        <div style="font-size: 12px; color: var(--muted); margin-top: 4px;">Recommended: 2000-3000 ml per day</div>
+      </div>
+
+      <div>
+        <label for="caffeine_max">Maximum Daily Caffeine (mg)</label>
+        <input
+          type="number"
+          id="caffeine_max"
+          name="caffeine_max_mg"
+          min="0"
+          step="50"
+          value="{{ goals.caffeine_max_mg | int }}"
+          placeholder="400"
+        >
+        <div style="font-size: 12px; color: var(--muted); margin-top: 4px;">Recommended: 400 mg per day (FDA limit)</div>
+      </div>
+
+      <div>
+        <label for="vitamin_d">Daily Vitamin D Goal (IU)</label>
+        <input
+          type="number"
+          id="vitamin_d"
+          name="vitamin_d_goal_iu"
+          min="400"
+          step="100"
+          value="{{ goals.vitamin_d_goal_iu | int }}"
+          placeholder="2000"
+        >
+        <div style="font-size: 12px; color: var(--muted); margin-top: 4px;">Recommended: 1000-2000 IU per day</div>
+      </div>
+
+      <div>
+        <label for="iron">Daily Iron Goal (mg)</label>
+        <input
+          type="number"
+          id="iron"
+          name="iron_goal_mg"
+          min="1"
+          step="0.5"
+          value="{{ goals.iron_goal_mg }}"
+          placeholder="18"
+        >
+        <div style="font-size: 12px; color: var(--muted); margin-top: 4px;">Women: 18 mg, Men: 8 mg</div>
+      </div>
+
+      <div class="actions">
+        <button type="submit">Save Goals</button>
+        <a href="{{ url_for('wellness_view') }}" class="button button-secondary">Back to Wellness</a>
+      </div>
+    </form>
+  </section>
+</main>
+{% endblock %}

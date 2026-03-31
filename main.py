@@ -1014,6 +1014,170 @@ def delete_weight_log(user_id: int, log_id: int) -> bool:
         close_connection(conn)
 
 
+# ===== Feature 8: Wellness Tracking (Water, Caffeine, Vitamins) =====
+
+
+def add_wellness_log(
+    user_id: int, log_date: str, log_type: str, value: float, notes: Optional[str] = None
+) -> bool:
+    """Add or update wellness log (water, caffeine, vitamins, etc.)."""
+    conn = normalize_connection(get_connection())
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            INSERT INTO wellness_logs (user_id, log_date, log_type, value, notes)
+            VALUES (%s, %s, %s, %s, %s)
+            ON CONFLICT(user_id, log_date, log_type) DO UPDATE SET value = EXCLUDED.value, notes = EXCLUDED.notes
+            """,
+            (user_id, log_date, log_type, value, notes),
+        )
+        conn.commit()
+        return True
+    finally:
+        close_connection(conn)
+
+
+def get_today_wellness_summary(user_id: int) -> dict:
+    """Get today's wellness log totals (water_ml, caffeine_mg, etc.) aggregated by type."""
+    today = date.today().isoformat()
+    conn = normalize_connection(get_connection())
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            SELECT log_type, SUM(value) as total_value
+            FROM wellness_logs
+            WHERE user_id = %s AND log_date = %s
+            GROUP BY log_type
+            """,
+            (user_id, today),
+        )
+        rows = cur.fetchall()
+    finally:
+        close_connection(conn)
+
+    result = {}
+    for row in rows:
+        result[f"{row['log_type']}_today"] = row["total_value"]
+    return result
+
+
+def get_wellness_logs(user_id: int, log_type: str, days: int = 30) -> List[dict]:
+    """Get wellness logs for a specific type over past N days."""
+    end_date = date.today().isoformat()
+    start_date = (date.today() - timedelta(days=days)).isoformat()
+
+    conn = normalize_connection(get_connection())
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            SELECT id, log_date, value, notes
+            FROM wellness_logs
+            WHERE user_id = %s AND log_type = %s AND log_date BETWEEN %s AND %s
+            ORDER BY log_date DESC
+            """,
+            (user_id, log_type, start_date, end_date),
+        )
+        rows = cur.fetchall()
+    finally:
+        close_connection(conn)
+    return [dict(row) for row in rows]
+
+
+def get_wellness_goals(user_id: int) -> dict:
+    """Get all wellness goals (read from settings table)."""
+    goals = {}
+    goal_keys = ["water_goal_ml", "caffeine_max_mg", "vitamin_d_goal_iu", "iron_goal_mg"]
+
+    for key in goal_keys:
+        value = get_setting(key, user_id, None)
+        if value:
+            try:
+                goals[key] = float(value)
+            except (ValueError, TypeError):
+                pass
+
+    # Set sensible defaults if not configured
+    if "water_goal_ml" not in goals:
+        goals["water_goal_ml"] = 2000.0
+    if "caffeine_max_mg" not in goals:
+        goals["caffeine_max_mg"] = 400.0
+    if "vitamin_d_goal_iu" not in goals:
+        goals["vitamin_d_goal_iu"] = 2000.0
+    if "iron_goal_mg" not in goals:
+        goals["iron_goal_mg"] = 18.0
+
+    return goals
+
+
+def set_wellness_goal(user_id: int, log_type: str, goal_value: float) -> None:
+    """Set or update wellness goal in settings table."""
+    key = f"{log_type}_goal_mg" if log_type in ["caffeine"] else f"{log_type}_goal_iu" if log_type in ["vitamin_d"] else f"{log_type}_goal_" + ("mg" if log_type == "iron" else "ml")
+    set_setting(key, str(goal_value), user_id)
+
+
+def delete_wellness_log(user_id: int, log_id: int) -> bool:
+    """Delete wellness log with ownership check."""
+    conn = normalize_connection(get_connection())
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT id FROM wellness_logs WHERE id = %s AND user_id = %s",
+            (log_id, user_id),
+        )
+        existing = cur.fetchone()
+        if not existing:
+            return False
+
+        cur.execute(
+            "DELETE FROM wellness_logs WHERE id = %s AND user_id = %s",
+            (log_id, user_id),
+        )
+        conn.commit()
+        return True
+    finally:
+        close_connection(conn)
+
+
+def get_wellness_trend(user_id: int, log_type: str, days: int = 30) -> dict:
+    """Get wellness trend stats over past N days."""
+    end_date = date.today().isoformat()
+    start_date = (date.today() - timedelta(days=days)).isoformat()
+
+    conn = normalize_connection(get_connection())
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            SELECT MIN(value) as min_value, MAX(value) as max_value,
+                   AVG(value) as avg_value, COUNT(DISTINCT log_date) as days_logged
+            FROM wellness_logs
+            WHERE user_id = %s AND log_type = %s AND log_date BETWEEN %s AND %s
+            """,
+            (user_id, log_type, start_date, end_date),
+        )
+        row = cur.fetchone()
+    finally:
+        close_connection(conn)
+
+    if not row:
+        return {
+            "min_value": None,
+            "max_value": None,
+            "avg_value": None,
+            "days_logged": 0,
+        }
+
+    return {
+        "min_value": row["min_value"],
+        "max_value": row["max_value"],
+        "avg_value": row["avg_value"],
+        "days_logged": row["days_logged"],
+    }
+
+
 def create_user(username: str, password: str) -> Optional[User]:
     """Create a new user. Returns the User or None if the username is taken."""
     hashed = generate_password_hash(password)

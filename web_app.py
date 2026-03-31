@@ -46,6 +46,12 @@ from main import (
     get_weight_logs,
     get_weight_trend,
     delete_weight_log,
+    add_wellness_log,
+    get_today_wellness_summary,
+    get_wellness_logs,
+    get_wellness_goals,
+    set_wellness_goal,
+    delete_wellness_log,
 )
 from usda_api import UsdaFood, UsdaSearchResponse, search_foods
 
@@ -616,6 +622,103 @@ def delete_weight(log_id: int):
     """Delete weight log entry."""
     delete_weight_log(current_user.id, log_id)
     return redirect(url_for("weight_view"))
+
+
+# ===== Feature 8: Wellness Tracking Routes =====
+
+
+@app.route("/wellness", methods=["GET"])
+@login_required
+def wellness_view():
+    """Show wellness tracking dashboard."""
+    today_summary = get_today_wellness_summary(current_user.id)
+    goals = get_wellness_goals(current_user.id)
+    water_logs = get_wellness_logs(current_user.id, "water_ml", days=30)
+    caffeine_logs = get_wellness_logs(current_user.id, "caffeine_mg", days=30)
+
+    return render_template(
+        "wellness.html",
+        today_summary=today_summary,
+        goals=goals,
+        water_logs=water_logs,
+        caffeine_logs=caffeine_logs,
+    )
+
+
+@app.route("/wellness", methods=["POST"])
+@login_required
+def add_wellness():
+    """Add new wellness log entry."""
+    log_date_str = request.form.get("log_date", "").strip()
+    log_type = request.form.get("log_type", "").strip()
+    value_str = request.form.get("value", "").strip()
+    notes = request.form.get("notes", "").strip() or None
+
+    if not log_date_str or not log_type or not value_str:
+        return redirect(url_for("wellness_view"))
+
+    try:
+        value = float(value_str)
+        if value <= 0:
+            return redirect(url_for("wellness_view"))
+    except ValueError:
+        return redirect(url_for("wellness_view"))
+
+    # Validate log_type is known
+    valid_types = ["water_ml", "caffeine_mg", "vitamin_d_iu", "iron_mg"]
+    if log_type not in valid_types:
+        return redirect(url_for("wellness_view"))
+
+    add_wellness_log(current_user.id, log_date_str, log_type, value, notes)
+    return redirect(url_for("wellness_view"))
+
+
+@app.route("/wellness/settings", methods=["GET"])
+@login_required
+def wellness_settings_view():
+    """Show wellness goals settings."""
+    goals = get_wellness_goals(current_user.id)
+    return render_template("wellness_settings.html", goals=goals)
+
+
+@app.route("/wellness/settings", methods=["POST"])
+@login_required
+def wellness_settings_save():
+    """Save wellness goals."""
+    water_goal = request.form.get("water_goal_ml", "").strip()
+    caffeine_max = request.form.get("caffeine_max_mg", "").strip()
+    vitamin_d_goal = request.form.get("vitamin_d_goal_iu", "").strip()
+    iron_goal = request.form.get("iron_goal_mg", "").strip()
+
+    try:
+        if water_goal:
+            float_val = float(water_goal)
+            if float_val > 0:
+                set_setting("water_goal_ml", water_goal, user_id=current_user.id)
+        if caffeine_max:
+            float_val = float(caffeine_max)
+            if float_val > 0:
+                set_setting("caffeine_max_mg", caffeine_max, user_id=current_user.id)
+        if vitamin_d_goal:
+            float_val = float(vitamin_d_goal)
+            if float_val > 0:
+                set_setting("vitamin_d_goal_iu", vitamin_d_goal, user_id=current_user.id)
+        if iron_goal:
+            float_val = float(iron_goal)
+            if float_val > 0:
+                set_setting("iron_goal_mg", iron_goal, user_id=current_user.id)
+    except ValueError:
+        pass
+
+    return redirect(url_for("wellness_view"))
+
+
+@app.route("/wellness/<int:log_id>/delete", methods=["POST"])
+@login_required
+def delete_wellness(log_id: int):
+    """Delete wellness log entry."""
+    delete_wellness_log(current_user.id, log_id)
+    return redirect(url_for("wellness_view"))
 
 
 if __name__ == "__main__":

@@ -1,0 +1,149 @@
+{% extends "base.html" %}
+
+{% block body %}
+<main>
+  <section class="card">
+    <div class="card-header">
+      <h2>Wellness Tracking</h2>
+      <p class="subtitle">Water, Caffeine, Vitamins & More</p>
+    </div>
+
+    <!-- Today's Summary -->
+    <h3>Today's Summary</h3>
+    <div class="grid" style="grid-template-columns: repeat(2, 1fr); gap: 8px; margin-bottom: 24px;">
+      <div class="card" style="background: var(--muted); padding: 16px; border: none;">
+        <div style="font-size: 12px; color: var(--muted); margin-bottom: 4px;">Water</div>
+        <div style="font-size: 20px; font-weight: 600;">{{ today_summary.get('water_ml_today', 0) | int }} ml</div>
+        <div style="font-size: 11px; color: var(--muted);">Goal: {{ goals.water_goal_ml | int }} ml</div>
+      </div>
+
+      <div class="card" style="background: var(--muted); padding: 16px; border: none;">
+        <div style="font-size: 12px; color: var(--muted); margin-bottom: 4px;">Caffeine</div>
+        <div style="font-size: 20px; font-weight: 600;">{{ today_summary.get('caffeine_mg_today', 0) | int }} mg</div>
+        <div style="font-size: 11px; color: var(--muted);">Max: {{ goals.caffeine_max_mg | int }} mg</div>
+      </div>
+
+      <div class="card" style="background: var(--muted); padding: 16px; border: none;">
+        <div style="font-size: 12px; color: var(--muted); margin-bottom: 4px;">Vitamin D</div>
+        <div style="font-size: 20px; font-weight: 600;">{{ today_summary.get('vitamin_d_iu_today', 0) | int }} IU</div>
+        <div style="font-size: 11px; color: var(--muted);">Goal: {{ goals.vitamin_d_goal_iu | int }} IU</div>
+      </div>
+
+      <div class="card" style="background: var(--muted); padding: 16px; border: none;">
+        <div style="font-size: 12px; color: var(--muted); margin-bottom: 4px;">Iron</div>
+        <div style="font-size: 20px; font-weight: 600;">{{ today_summary.get('iron_mg_today', 0) | int }} mg</div>
+        <div style="font-size: 11px; color: var(--muted);">Goal: {{ goals.iron_goal_mg | int }} mg</div>
+      </div>
+    </div>
+
+    <!-- Quick Add Buttons -->
+    <h3>Quick Add</h3>
+    <div style="display: grid; grid-template-columns: repeat(2, 1fr); gap: 8px; margin-bottom: 24px;">
+      <form method="post" style="display: contents;">
+        <input type="hidden" name="log_type" value="water_ml">
+        <input type="hidden" name="log_date" value="{{ now.strftime('%Y-%m-%d') }}">
+        <input type="hidden" name="value" value="250">
+        <button type="submit" style="padding: 12px;">+250ml Water</button>
+      </form>
+
+      <form method="post" style="display: contents;">
+        <input type="hidden" name="log_type" value="caffeine_mg">
+        <input type="hidden" name="log_date" value="{{ now.strftime('%Y-%m-%d') }}">
+        <input type="hidden" name="value" value="100">
+        <button type="submit" style="padding: 12px;">+100mg Caffeine</button>
+      </form>
+
+      <form method="post" style="display: contents;">
+        <input type="hidden" name="log_type" value="vitamin_d_iu">
+        <input type="hidden" name="log_date" value="{{ now.strftime('%Y-%m-%d') }}">
+        <input type="hidden" name="value" value="1000">
+        <button type="submit" style="padding: 12px;">+1000 IU Vitamin D</button>
+      </form>
+
+      <form method="post" style="display: contents;">
+        <input type="hidden" name="log_type" value="water_ml">
+        <input type="hidden" name="log_date" value="{{ now.strftime('%Y-%m-%d') }}">
+        <input type="hidden" name="value" value="500">
+        <button type="submit" style="padding: 12px;">+500ml Water</button>
+      </form>
+    </div>
+
+    <!-- Add Custom Entry -->
+    <h3>Add Entry</h3>
+    <form method="post" style="display: grid; gap: 12px; margin-bottom: 24px;">
+      <div>
+        <label for="log_date">Date</label>
+        <input type="date" id="log_date" name="log_date" required value="{{ now.strftime('%Y-%m-%d') }}">
+      </div>
+
+      <div>
+        <label for="log_type">Type</label>
+        <select id="log_type" name="log_type" required>
+          <option value="">Select type...</option>
+          <option value="water_ml">Water (ml)</option>
+          <option value="caffeine_mg">Caffeine (mg)</option>
+          <option value="vitamin_d_iu">Vitamin D (IU)</option>
+          <option value="iron_mg">Iron (mg)</option>
+        </select>
+      </div>
+
+      <div>
+        <label for="value">Value</label>
+        <input type="number" id="value" name="value" step="0.1" required placeholder="e.g. 250">
+      </div>
+
+      <div>
+        <label for="notes">Notes (optional)</label>
+        <input type="text" id="notes" name="notes" placeholder="e.g. Black coffee">
+      </div>
+
+      <div class="actions">
+        <button type="submit">Add Entry</button>
+        <a href="{{ url_for('wellness_settings_view') }}" class="button button-secondary">Edit Goals</a>
+      </div>
+    </form>
+
+    <!-- Recent Water Logs -->
+    {% if water_logs %}
+    <h3>Recent Water Logs (Last 30 Days)</h3>
+    <ul class="list">
+      {% for log in water_logs %}
+      <li style="display: flex; justify-content: space-between; align-items: center; padding: 12px; border-bottom: 1px solid var(--muted);">
+        <div>
+          <div>{{ log.log_date }}: {{ log.value | int }} ml</div>
+          {% if log.notes %}<div style="font-size: 12px; color: var(--muted);">{{ log.notes }}</div>{% endif %}
+        </div>
+        <form method="post" action="{{ url_for('delete_wellness', log_id=log.id) }}" onsubmit="return confirm('Delete this entry?');">
+          <button type="submit" style="padding: 4px 8px; font-size: 12px;">Delete</button>
+        </form>
+      </li>
+      {% endfor %}
+    </ul>
+    {% endif %}
+
+    <!-- Recent Caffeine Logs -->
+    {% if caffeine_logs %}
+    <h3>Recent Caffeine Logs (Last 30 Days)</h3>
+    <ul class="list">
+      {% for log in caffeine_logs %}
+      <li style="display: flex; justify-content: space-between; align-items: center; padding: 12px; border-bottom: 1px solid var(--muted);">
+        <div>
+          <div>{{ log.log_date }}: {{ log.value | int }} mg</div>
+          {% if log.notes %}<div style="font-size: 12px; color: var(--muted);">{{ log.notes }}</div>{% endif %}
+        </div>
+        <form method="post" action="{{ url_for('delete_wellness', log_id=log.id) }}" onsubmit="return confirm('Delete this entry?');">
+          <button type="submit" style="padding: 4px 8px; font-size: 12px;">Delete</button>
+        </form>
+      </li>
+      {% endfor %}
+    </ul>
+    {% endif %}
+
+  </section>
+</main>
+
+<script>
+  // Set the input date to today by default
+  document.getElementById('log_date').valueAsDate = new Date();
+</script>
+{% endblock %}
