@@ -18,6 +18,7 @@ calories.db
 
 # Environment variables
 .env
+.env.local
 
 # macOS
 .DS_Store

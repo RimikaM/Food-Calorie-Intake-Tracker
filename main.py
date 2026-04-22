@@ -108,18 +108,37 @@ class SqliteConnection:
         return getattr(self._conn, name)
 
 
+class PostgresConnection:
+    """Wrapper for PostgreSQL connection for consistency with SqliteConnection."""
+
+    def __init__(self, conn):
+        self._conn = conn
+        self.is_sqlite = False
+
+    def cursor(self, *args, **kwargs):
+        return self._conn.cursor(*args, **kwargs)
+
+    def commit(self):
+        return self._conn.commit()
+
+    def close(self):
+        return self._conn.close()
+
+    def __getattr__(self, name):
+        return getattr(self._conn, name)
+
+
 def get_connection():
-    """Get a database connection. Uses PostgreSQL for production (Railway), SQLite for local development."""
+    """Get a database connection. Uses PostgreSQL when DATABASE_URL is set, otherwise SQLite."""
     db_url = os.getenv("DATABASE_URL")
 
     if db_url:
-        # Railway production: use PostgreSQL
+        # DATABASE_URL present: use PostgreSQL
         if db_url.startswith("postgres://"):
             db_url = db_url.replace("postgres://", "postgresql://")
         conn = psycopg2.connect(db_url)
         conn.cursor_factory = psycopg2.extras.RealDictCursor
-        conn.is_sqlite = False
-        return conn
+        return PostgresConnection(conn)
     else:
         # Local development: use SQLite
         db_path = Path(__file__).with_name("calories.db")
@@ -158,14 +177,14 @@ def init_db() -> None:
         table_definitions = [
             """
             CREATE TABLE IF NOT EXISTS users (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                id SERIAL PRIMARY KEY,
                 username TEXT UNIQUE NOT NULL,
                 password_hash TEXT NOT NULL
             );
             """,
             """
             CREATE TABLE IF NOT EXISTS entries (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                id SERIAL PRIMARY KEY,
                 user_id INTEGER NOT NULL REFERENCES users(id),
                 eaten_at TEXT NOT NULL,
                 food TEXT NOT NULL,
@@ -180,7 +199,7 @@ def init_db() -> None:
             """,
             """
             CREATE TABLE IF NOT EXISTS foods (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                id SERIAL PRIMARY KEY,
                 fdc_id INTEGER UNIQUE NOT NULL,
                 description TEXT NOT NULL,
                 brand TEXT,
@@ -200,7 +219,7 @@ def init_db() -> None:
             """,
             """
             CREATE TABLE IF NOT EXISTS search_history (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                id SERIAL PRIMARY KEY,
                 user_id INTEGER NOT NULL REFERENCES users(id),
                 query TEXT NOT NULL,
                 searched_at TEXT NOT NULL,
@@ -210,7 +229,7 @@ def init_db() -> None:
             """,
             """
             CREATE TABLE IF NOT EXISTS meal_templates (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                id SERIAL PRIMARY KEY,
                 user_id INTEGER NOT NULL REFERENCES users(id),
                 name TEXT NOT NULL,
                 food_description TEXT NOT NULL,
@@ -223,7 +242,7 @@ def init_db() -> None:
             """,
             """
             CREATE TABLE IF NOT EXISTS weight_logs (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                id SERIAL PRIMARY KEY,
                 user_id INTEGER NOT NULL REFERENCES users(id),
                 logged_at TEXT NOT NULL,
                 weight_kg REAL NOT NULL,
@@ -233,7 +252,7 @@ def init_db() -> None:
             """,
             """
             CREATE TABLE IF NOT EXISTS wellness_logs (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                id SERIAL PRIMARY KEY,
                 user_id INTEGER NOT NULL REFERENCES users(id),
                 log_date TEXT NOT NULL,
                 log_type TEXT NOT NULL,
@@ -244,7 +263,7 @@ def init_db() -> None:
             """,
             """
             CREATE TABLE IF NOT EXISTS recipes (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                id SERIAL PRIMARY KEY,
                 user_id INTEGER NOT NULL REFERENCES users(id),
                 name TEXT NOT NULL,
                 description TEXT,
@@ -254,7 +273,7 @@ def init_db() -> None:
             """,
             """
             CREATE TABLE IF NOT EXISTS recipe_ingredients (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                id SERIAL PRIMARY KEY,
                 recipe_id INTEGER NOT NULL REFERENCES recipes(id),
                 food_id INTEGER REFERENCES foods(id),
                 food_name TEXT NOT NULL,
@@ -264,7 +283,7 @@ def init_db() -> None:
             """,
             """
             CREATE TABLE IF NOT EXISTS barcodes (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                id SERIAL PRIMARY KEY,
                 ean_code TEXT UNIQUE NOT NULL,
                 fdc_id INTEGER REFERENCES foods(id),
                 food_name TEXT,
@@ -274,7 +293,7 @@ def init_db() -> None:
             """,
             """
             CREATE TABLE IF NOT EXISTS notifications (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                id SERIAL PRIMARY KEY,
                 user_id INTEGER NOT NULL REFERENCES users(id),
                 event_type TEXT NOT NULL,
                 title TEXT NOT NULL,
@@ -295,7 +314,7 @@ def init_db() -> None:
             """,
             """
             CREATE TABLE IF NOT EXISTS user_points (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                id SERIAL PRIMARY KEY,
                 user_id INTEGER NOT NULL REFERENCES users(id),
                 points_date TEXT NOT NULL,
                 daily_points INTEGER DEFAULT 0,
@@ -307,7 +326,7 @@ def init_db() -> None:
             """,
             """
             CREATE TABLE IF NOT EXISTS leaderboards (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                id SERIAL PRIMARY KEY,
                 user_id INTEGER NOT NULL REFERENCES users(id),
                 period_start TEXT NOT NULL,
                 period_end TEXT NOT NULL,
@@ -318,7 +337,7 @@ def init_db() -> None:
             """,
             """
             CREATE TABLE IF NOT EXISTS achievements (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                id SERIAL PRIMARY KEY,
                 user_id INTEGER NOT NULL REFERENCES users(id),
                 achievement_type TEXT NOT NULL,
                 achievement_name TEXT NOT NULL,

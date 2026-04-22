@@ -1,8 +1,10 @@
 import os
+import hmac
+import secrets
 from datetime import date, datetime
 from typing import Optional
 
-from flask import Flask, redirect, render_template, request, url_for, make_response, flash
+from flask import Flask, redirect, render_template, request, url_for, make_response, flash, session, abort, jsonify
 from flask_login import (
     LoginManager,
     UserMixin,
@@ -91,11 +93,45 @@ from usda_api import UsdaFood, UsdaSearchResponse, search_foods, search_foods_by
 
 
 app = Flask(__name__)
-app.secret_key = os.getenv("SECRET_KEY", "dev-secret-change-in-production")
+is_production = os.getenv("FLASK_ENV") == "production" or bool(os.getenv("RENDER"))
+secret_key = os.getenv("SECRET_KEY")
+if not secret_key:
+    if is_production:
+        raise RuntimeError("SECRET_KEY must be set in production.")
+    secret_key = "dev-secret-change-in-production"
+app.secret_key = secret_key
+app.config["SESSION_COOKIE_HTTPONLY"] = True
+app.config["SESSION_COOKIE_SAMESITE"] = "Lax"
+app.config["SESSION_COOKIE_SECURE"] = is_production
 
 login_manager = LoginManager(app)
 login_manager.login_view = "login"
 login_manager.login_message = "Please log in to continue."
+
+
+def _get_or_create_csrf_token() -> str:
+    token = session.get("_csrf_token")
+    if not token:
+        token = secrets.token_urlsafe(32)
+        session["_csrf_token"] = token
+    return token
+
+
+@app.context_processor
+def inject_csrf_token():
+    return {"csrf_token": _get_or_create_csrf_token}
+
+
+@app.before_request
+def validate_csrf_token():
+    if request.method != "POST" or app.config.get("TESTING"):
+        return
+
+    expected = session.get("_csrf_token")
+    provided = request.form.get("_csrf_token") or request.headers.get("X-CSRF-Token")
+    if not expected or not provided or not hmac.compare_digest(str(provided), str(expected)):
+        abort(400)
+
 
 init_db()
 
@@ -147,6 +183,20 @@ def index():
         carbs_goal=carbs_goal,
         fat_goal=fat_goal,
     )
+
+
+@app.route("/healthz", methods=["GET"])
+def healthz():
+    conn = normalize_connection(get_connection())
+    try:
+        cur = conn.cursor()
+        cur.execute("SELECT 1")
+        cur.fetchone()
+        return jsonify({"status": "ok"}), 200
+    except Exception:
+        return jsonify({"status": "error"}), 503
+    finally:
+        close_connection(conn)
 
 
 @app.route("/add", methods=["POST"])
