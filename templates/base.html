@@ -6,14 +6,33 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <style>
       :root {
-        color-scheme: light dark;
         --bg: #050816;
-        --card-bg: #0f172a;
+        --gradient-top: #1f2937;
+        --card-grad-a: #1f2937;
+        --card-grad-b: #020617;
         --accent: #38bdf8;
         --accent-soft: rgba(56, 189, 248, 0.15);
         --text: #e5e7eb;
         --muted: #9ca3af;
         --danger: #f97373;
+        --input-bg: rgba(15, 23, 42, 0.9);
+        --entry-border: rgba(30, 64, 175, 0.4);
+        --border: rgba(148, 163, 184, 0.3);
+      }
+
+      [data-theme="light"] {
+        --bg: #f0f4f8;
+        --gradient-top: #e2e8f0;
+        --card-grad-a: #f8fafc;
+        --card-grad-b: #eef2f7;
+        --accent: #0284c7;
+        --accent-soft: rgba(2, 132, 199, 0.1);
+        --text: #1e293b;
+        --muted: #64748b;
+        --danger: #dc2626;
+        --input-bg: rgba(241, 245, 249, 0.95);
+        --entry-border: rgba(100, 116, 139, 0.2);
+        --border: rgba(100, 116, 139, 0.25);
       }
 
       * {
@@ -25,7 +44,7 @@
         padding: 0;
         font-family: system-ui, -apple-system, BlinkMacSystemFont, "SF Pro Text",
           sans-serif;
-        background: radial-gradient(circle at top, #1f2937 0, var(--bg) 55%);
+        background: radial-gradient(circle at top, var(--gradient-top) 0, var(--bg) 55%);
         color: var(--text);
         min-height: 100vh;
         display: flex;
@@ -108,11 +127,11 @@
       }
 
       .card {
-        background: radial-gradient(circle at top left, #1f2937 0, #020617 55%);
+        background: radial-gradient(circle at top left, var(--card-grad-a) 0, var(--card-grad-b) 55%);
         border-radius: 18px;
         padding: 18px 18px 16px;
-        border: 1px solid rgba(148, 163, 184, 0.3);
-        box-shadow: 0 18px 45px rgba(15, 23, 42, 0.9);
+        border: 1px solid var(--border);
+        box-shadow: 0 18px 45px rgba(15, 23, 42, 0.15);
       }
 
       .card-header {
@@ -152,7 +171,7 @@
         justify-content: space-between;
         align-items: flex-start;
         padding: 6px 0;
-        border-bottom: 1px solid rgba(30, 64, 175, 0.4);
+        border-bottom: 1px solid var(--entry-border);
       }
 
       .entry:last-child {
@@ -217,8 +236,8 @@
         width: 100%;
         padding: 7px 9px;
         border-radius: 10px;
-        border: 1px solid rgba(148, 163, 184, 0.4);
-        background: rgba(15, 23, 42, 0.9);
+        border: 1px solid var(--border);
+        background: var(--input-bg);
         color: var(--text);
         font: inherit;
       }
@@ -282,8 +301,8 @@
         align-items: baseline;
         padding: 7px 9px;
         border-radius: 10px;
-        background: rgba(15, 23, 42, 0.9);
-        border: 1px solid rgba(148, 163, 184, 0.3);
+        background: var(--input-bg);
+        border: 1px solid var(--border);
       }
 
       .history-item a {
@@ -336,12 +355,33 @@
           <span style="font-size:0.8rem;color:var(--muted);padding:4px 6px">{{ current_user.username }}</span>
           <a href="{{ url_for('logout') }}">Log out</a>
           {% endif %}
+          <button id="theme-toggle" type="button" onclick="toggleTheme()" style="background:none;border:1px solid var(--border);color:var(--muted);padding:4px 10px;border-radius:999px;font-size:0.8rem;cursor:pointer;box-shadow:none;transform:none;filter:none" title="Toggle light/dark mode">Light</button>
         </nav>
       </header>
 
       {% block body %}{% endblock %}
     </div>
     <script>
+      // Theme toggle
+      function applyTheme(theme) {
+        document.body.setAttribute("data-theme", theme);
+        const btn = document.getElementById("theme-toggle");
+        if (btn) btn.textContent = theme === "light" ? "Dark" : "Light";
+      }
+
+      function toggleTheme() {
+        const current = document.body.getAttribute("data-theme") || "dark";
+        const next = current === "light" ? "dark" : "light";
+        localStorage.setItem("theme", next);
+        applyTheme(next);
+      }
+
+      // Apply saved theme immediately
+      (function () {
+        const saved = localStorage.getItem("theme") || "dark";
+        applyTheme(saved);
+      })();
+
       document.addEventListener("DOMContentLoaded", function () {
         const token = document.body.getAttribute("data-csrf-token");
         if (!token) {

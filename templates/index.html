@@ -36,6 +36,9 @@
     <ul class="list">
       {% for e in entries %}
       <li class="entry" style="align-items: flex-start; gap: 8px;">
+        {% if e.photo_path %}
+        <img src="{{ url_for('static', filename='uploads/' + e.photo_path) }}" alt="food photo" style="width:44px;height:44px;object-fit:cover;border-radius:8px;flex-shrink:0" />
+        {% endif %}
         <div class="entry-main">
           <div>{{ e.food }}</div>
           <div class="entry-meta">
@@ -79,6 +82,96 @@
     {% endif %}
   </section>
 
+  <section class="card" style="grid-column: 1 / -1; display: grid; grid-template-columns: minmax(0,2fr) minmax(0,1fr); gap: 18px; align-items: start;">
+    <div>
+      <div class="card-header">
+        <div class="card-title">Last 7 days</div>
+        {% if goal %}<div class="subtle">Goal: {{ goal }} kcal</div>{% endif %}
+      </div>
+      <canvas id="weekChart" height="90"></canvas>
+    </div>
+    <div>
+      <div class="card-header">
+        <div class="card-title">Today's macros</div>
+      </div>
+      {% if total_protein or total_carbs or total_fat %}
+      <canvas id="macroChart" height="140"></canvas>
+      {% else %}
+      <p class="list-empty" style="font-size:0.8rem">No macro data yet today.</p>
+      {% endif %}
+    </div>
+    <script>
+      (function () {
+        const labels = {{ chart_labels | tojson }};
+        const calories = {{ chart_calories | tojson }};
+        const goal = {{ goal | default(0) }};
+
+        const weekCtx = document.getElementById("weekChart").getContext("2d");
+        new Chart(weekCtx, {
+          type: "bar",
+          data: {
+            labels,
+            datasets: [
+              {
+                label: "Calories",
+                data: calories,
+                backgroundColor: calories.map(v =>
+                  goal && v > goal ? "rgba(249,115,115,0.7)" : "rgba(56,189,248,0.6)"
+                ),
+                borderColor: calories.map(v =>
+                  goal && v > goal ? "rgba(249,115,115,1)" : "rgba(56,189,248,1)"
+                ),
+                borderWidth: 1,
+                borderRadius: 4,
+              },
+              ...(goal ? [{
+                type: "line",
+                label: "Goal",
+                data: Array(labels.length).fill(goal),
+                borderColor: "rgba(249,115,115,0.6)",
+                borderDash: [4, 4],
+                borderWidth: 1.5,
+                pointRadius: 0,
+                fill: false,
+              }] : []),
+            ],
+          },
+          options: {
+            responsive: true,
+            plugins: { legend: { display: false } },
+            scales: {
+              y: { beginAtZero: true, grid: { color: "rgba(148,163,184,0.1)" }, ticks: { color: "var(--muted)" } },
+              x: { grid: { display: false }, ticks: { color: "var(--muted)" } },
+            },
+          },
+        });
+
+        {% if total_protein or total_carbs or total_fat %}
+        const macroCtx = document.getElementById("macroChart").getContext("2d");
+        new Chart(macroCtx, {
+          type: "doughnut",
+          data: {
+            labels: ["Protein", "Carbs", "Fat"],
+            datasets: [{
+              data: [{{ total_protein | round(1) }}, {{ total_carbs | round(1) }}, {{ total_fat | round(1) }}],
+              backgroundColor: ["rgba(56,189,248,0.7)", "rgba(74,222,128,0.7)", "rgba(249,115,115,0.7)"],
+              borderColor: ["rgba(56,189,248,1)", "rgba(74,222,128,1)", "rgba(249,115,115,1)"],
+              borderWidth: 1,
+            }],
+          },
+          options: {
+            responsive: true,
+            plugins: {
+              legend: { position: "bottom", labels: { color: "var(--muted)", font: { size: 11 }, boxWidth: 12 } },
+            },
+            cutout: "65%",
+          },
+        });
+        {% endif %}
+      })();
+    </script>
+  </section>
+
   <section class="card">
     <div class="card-header">
       <div>
@@ -90,7 +183,7 @@
       </div>
     </div>
 
-    <form method="post" action="{{ url_for('add') }}">
+    <form method="post" action="{{ url_for('add') }}" enctype="multipart/form-data">
       <div>
         <label for="food">Food / meal</label>
         <input
@@ -122,6 +215,11 @@
           name="notes"
           placeholder="How did it make you feel? Hungry, satisfied, cozy…"
         ></textarea>
+      </div>
+
+      <div>
+        <label for="photo">Photo (optional)</label>
+        <input id="photo" name="photo" type="file" accept="image/*" style="padding:4px 0;border:none;background:none;color:var(--muted);font-size:0.8rem" />
       </div>
 
       <div class="actions">

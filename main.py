@@ -22,6 +22,7 @@ class Entry:
     meal: Optional[str]
     servings: Optional[float]
     notes: Optional[str]
+    photo_path: Optional[str] = None
 
 
 @dataclass
@@ -358,6 +359,21 @@ def init_db() -> None:
                 pass
 
         conn.commit()
+
+        # Schema migrations - add new columns to existing tables
+        if getattr(conn, 'is_sqlite', False):
+            try:
+                cur.execute("ALTER TABLE entries ADD COLUMN photo_path TEXT")
+                conn.commit()
+            except sqlite3.OperationalError:
+                pass  # Column already exists in SQLite
+        else:
+            try:
+                cur.execute("ALTER TABLE entries ADD COLUMN IF NOT EXISTS photo_path TEXT")
+                conn.commit()
+            except Exception:
+                pass  # Column already exists in PostgreSQL
+
     finally:
         # Only close if it's a wrapped SqliteConnection and not borrowed from tests
         if isinstance(conn, SqliteConnection) and not getattr(conn, 'is_test', False):
@@ -374,6 +390,7 @@ def add_entry(
     fat_g: Optional[float] = None,
     meal: Optional[str] = None,
     servings: Optional[float] = None,
+    photo_path: Optional[str] = None,
 ) -> None:
     now = datetime.now().isoformat(timespec="minutes")
     conn = normalize_connection(get_connection())
@@ -381,8 +398,8 @@ def add_entry(
         cur = conn.cursor()
         cur.execute(
             """
-            INSERT INTO entries (user_id, eaten_at, food, calories, protein_g, carbs_g, fat_g, meal, servings, notes)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            INSERT INTO entries (user_id, eaten_at, food, calories, protein_g, carbs_g, fat_g, meal, servings, notes, photo_path)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             """,
             (
                 user_id,
@@ -395,6 +412,7 @@ def add_entry(
                 meal,
                 servings,
                 notes.strip() if notes else None,
+                photo_path,
             ),
         )
         conn.commit()
@@ -409,7 +427,7 @@ def get_entry_by_id(entry_id: int, user_id: int) -> Optional[Entry]:
         cur = conn.cursor()
         cur.execute(
             """
-            SELECT id, eaten_at, food, calories, protein_g, carbs_g, fat_g, meal, servings, notes
+            SELECT id, eaten_at, food, calories, protein_g, carbs_g, fat_g, meal, servings, notes, photo_path
             FROM entries
             WHERE id = %s AND user_id = %s
             """,
@@ -431,6 +449,7 @@ def get_entry_by_id(entry_id: int, user_id: int) -> Optional[Entry]:
         meal=row["meal"],
         servings=row["servings"],
         notes=row["notes"],
+        photo_path=row["photo_path"],
     )
 
 
@@ -524,7 +543,7 @@ def fetch_entries_for_date(day: date, user_id: int) -> List[Entry]:
         cur = conn.cursor()
         cur.execute(
             """
-            SELECT id, eaten_at, food, calories, protein_g, carbs_g, fat_g, meal, servings, notes
+            SELECT id, eaten_at, food, calories, protein_g, carbs_g, fat_g, meal, servings, notes, photo_path
             FROM entries
             WHERE user_id = %s AND eaten_at BETWEEN %s AND %s
             ORDER BY eaten_at ASC
@@ -548,6 +567,7 @@ def fetch_entries_for_date(day: date, user_id: int) -> List[Entry]:
                 meal=r["meal"],
                 servings=r["servings"],
                 notes=r["notes"],
+                photo_path=r["photo_path"],
             )
         )
     return entries
@@ -560,7 +580,7 @@ def fetch_all_entries(user_id: int) -> list[Entry]:
         cur = conn.cursor()
         cur.execute(
             """
-            SELECT id, eaten_at, food, calories, protein_g, carbs_g, fat_g, meal, servings, notes
+            SELECT id, eaten_at, food, calories, protein_g, carbs_g, fat_g, meal, servings, notes, photo_path
             FROM entries
             WHERE user_id = %s
             ORDER BY eaten_at DESC
@@ -584,6 +604,7 @@ def fetch_all_entries(user_id: int) -> list[Entry]:
                 meal=r["meal"],
                 servings=r["servings"],
                 notes=r["notes"],
+                photo_path=r["photo_path"],
             )
         )
     return entries
@@ -927,7 +948,7 @@ def get_week_summary(user_id: int, end_date: Optional[date] = None) -> dict:
             SELECT
                 COUNT(*) as entry_count,
                 SUM(calories) as total_calories,
-                COUNT(DISTINCT DATE(eaten_at::timestamp)) as days_logged,
+                COUNT(DISTINCT substr(eaten_at, 1, 10)) as days_logged,
                 SUM(COALESCE(protein_g, 0)) as total_protein_g,
                 SUM(COALESCE(carbs_g, 0)) as total_carbs_g,
                 SUM(COALESCE(fat_g, 0)) as total_fat_g,
@@ -1662,7 +1683,8 @@ def get_barcode_history(user_id: int, limit: int = 10) -> List[dict]:
 
 def create_user(username: str, password: str) -> Optional[User]:
     """Create a new user. Returns the User or None if the username is taken."""
-    hashed = generate_password_hash(password)
+    # Use PBKDF2 for compatibility with Python builds that lack hashlib.scrypt.
+    hashed = generate_password_hash(password, method="pbkdf2:sha256")
     try:
         conn = normalize_connection(get_connection())
         try:
@@ -2265,7 +2287,7 @@ def calculate_daily_points(user_id: int, points_date: str = None) -> int:
             conn,
         )
         row = cur.fetchone()
-        total_protein = row[0] if row else 0
+        total_protein = row["total_protein"] if row and row["total_protein"] else 0
 
         # Calculate points
         points = 0
@@ -2278,19 +2300,23 @@ def calculate_daily_points(user_id: int, points_date: str = None) -> int:
 
         # Check for streaks and apply multiplier
         multiplier = 1.0
+        streak_start_date = (date.today() - timedelta(days=30)).isoformat()
         safe_execute(
             cur,
             """
             SELECT COUNT(DISTINCT points_date) as consecutive_days
             FROM user_points
-            WHERE user_id = %s AND points_date >= DATE('now', '-30 days')
-            ORDER BY points_date DESC
+            WHERE user_id = %s AND points_date >= %s
             """,
-            (user_id,),
+            (user_id, streak_start_date),
             conn,
         )
         streak_result = cur.fetchone()
-        streak = streak_result[0] if streak_result else 0
+        streak = (
+            streak_result["consecutive_days"]
+            if streak_result and streak_result["consecutive_days"]
+            else 0
+        )
 
         if streak >= 30:
             multiplier = 2.0
@@ -2363,9 +2389,9 @@ def get_leaderboard(period_type: str = "weekly", limit: int = 10) -> List[dict]:
         for idx, row in enumerate(rows, 1):
             result.append({
                 "rank": idx,
-                "user_id": row[0],
-                "username": row[1],
-                "points": row[2],
+                "user_id": row["id"],
+                "username": row["username"],
+                "points": row["total_points"],
             })
 
         close_connection(conn)
@@ -2402,10 +2428,10 @@ def get_user_points_summary(user_id: int, days: int = 30) -> dict:
         row = cur.fetchone()
 
         result = {
-            "days_logged": row[0] if row and row[0] else 0,
-            "total_points": row[1] if row and row[1] else 0,
-            "avg_daily_points": row[2] if row and row[2] else 0,
-            "best_day": row[3] if row and row[3] else 0,
+            "days_logged": row["days_logged"] if row and row["days_logged"] else 0,
+            "total_points": row["total_points"] if row and row["total_points"] else 0,
+            "avg_daily_points": row["avg_daily_points"] if row and row["avg_daily_points"] else 0,
+            "best_day": row["best_day"] if row and row["best_day"] else 0,
         }
 
         close_connection(conn)
@@ -2469,6 +2495,7 @@ def get_friends(user_id: int) -> List[dict]:
     conn = normalize_connection(get_connection())
     try:
         cur = conn.cursor()
+        week_start_date = (date.today() - timedelta(days=7)).isoformat()
 
         safe_execute(
             cur,
@@ -2477,12 +2504,12 @@ def get_friends(user_id: int) -> List[dict]:
             FROM users_friends uf
             JOIN users u ON uf.friend_id = u.id
             LEFT JOIN user_points up ON u.id = up.user_id
-                AND up.points_date >= DATE('now', '-7 days')
+                AND up.points_date >= %s
             WHERE uf.user_id = %s AND uf.status = 'accepted'
             GROUP BY u.id, u.username
             ORDER BY this_week_points DESC
             """,
-            (user_id,),
+            (week_start_date, user_id),
             conn,
         )
         rows = cur.fetchall()
@@ -2490,9 +2517,9 @@ def get_friends(user_id: int) -> List[dict]:
         result = []
         for row in rows:
             result.append({
-                "user_id": row[0],
-                "username": row[1],
-                "this_week_points": row[2] if row[2] else 0,
+                "user_id": row["id"],
+                "username": row["username"],
+                "this_week_points": row["this_week_points"] if row["this_week_points"] else 0,
             })
 
         close_connection(conn)
@@ -2561,6 +2588,7 @@ def get_friend_profile(friend_id: int, user_id: int) -> Optional[dict]:
             return None
 
         # Get stats
+        start_date = (date.today() - timedelta(days=30)).isoformat()
         safe_execute(
             cur,
             """
@@ -2569,20 +2597,20 @@ def get_friend_profile(friend_id: int, user_id: int) -> Optional[dict]:
                 COUNT(DISTINCT points_date) as days_logged,
                 AVG(daily_points) as avg_points
             FROM user_points
-            WHERE user_id = %s AND points_date >= DATE('now', '-30 days')
+            WHERE user_id = %s AND points_date >= %s
             """,
-            (friend_id,),
+            (friend_id, start_date),
             conn,
         )
         stats = cur.fetchone()
 
         close_connection(conn)
         return {
-            "user_id": user_row[0],
-            "username": user_row[1],
-            "total_points": stats[0] if stats and stats[0] else 0,
-            "days_logged": stats[1] if stats and stats[1] else 0,
-            "avg_points": stats[2] if stats and stats[2] else 0,
+            "user_id": user_row["id"],
+            "username": user_row["username"],
+            "total_points": stats["total_points"] if stats and stats["total_points"] else 0,
+            "days_logged": stats["days_logged"] if stats and stats["days_logged"] else 0,
+            "avg_points": stats["avg_points"] if stats and stats["avg_points"] else 0,
         }
 
     except (sqlite3.Error, psycopg2.Error) as e:
@@ -2666,35 +2694,54 @@ def check_and_award_achievements(user_id: int) -> None:
         cur = conn.cursor()
 
         # Check 7-day logging streak
+        last_7_days = (date.today() - timedelta(days=7)).isoformat()
         safe_execute(
             cur,
             """
             SELECT COUNT(DISTINCT points_date) as streak
             FROM user_points
-            WHERE user_id = %s AND points_date >= DATE('now', '-7 days')
+            WHERE user_id = %s AND points_date >= %s
             """,
-            (user_id,),
+            (user_id, last_7_days),
             conn,
         )
         streak_row = cur.fetchone()
-        streak = streak_row[0] if streak_row else 0
+        streak_7 = streak_row["streak"] if streak_row and streak_row["streak"] else 0
 
-        if streak >= 7:
+        if streak_7 >= 7:
             award_achievement(user_id, "streak_7", "🔥 Protein Warrior", "Logged protein for 7+ days", 50)
 
         # Check 30-day streak
-        if streak >= 30:
+        last_30_days = (date.today() - timedelta(days=30)).isoformat()
+        safe_execute(
+            cur,
+            """
+            SELECT COUNT(DISTINCT points_date) as streak
+            FROM user_points
+            WHERE user_id = %s AND points_date >= %s
+            """,
+            (user_id, last_30_days),
+            conn,
+        )
+        streak_row_30 = cur.fetchone()
+        streak_30 = streak_row_30["streak"] if streak_row_30 and streak_row_30["streak"] else 0
+
+        if streak_30 >= 30:
             award_achievement(user_id, "streak_30", "💪 Protein Legend", "Logged protein for 30+ days", 200)
 
         # Check 1000 total points
         safe_execute(
             cur,
-            "SELECT COALESCE(SUM(daily_points), 0) FROM user_points WHERE user_id = %s",
+            "SELECT COALESCE(SUM(daily_points), 0) as total_points FROM user_points WHERE user_id = %s",
             (user_id,),
             conn,
         )
         total_points_row = cur.fetchone()
-        total_points = total_points_row[0] if total_points_row else 0
+        total_points = (
+            total_points_row["total_points"]
+            if total_points_row and total_points_row["total_points"]
+            else 0
+        )
 
         if total_points >= 1000:
             award_achievement(user_id, "points_1000", "📈 Point Master", "Earned 1000+ total points", 100)

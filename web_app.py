@@ -1,8 +1,11 @@
 import os
 import hmac
 import secrets
-from datetime import date, datetime
+import uuid
+from datetime import date, datetime, timedelta
+from pathlib import Path
 from typing import Optional
+from werkzeug.utils import secure_filename
 
 from flask import Flask, redirect, render_template, request, url_for, make_response, flash, session, abort, jsonify
 from flask_login import (
@@ -104,6 +107,28 @@ app.config["SESSION_COOKIE_HTTPONLY"] = True
 app.config["SESSION_COOKIE_SAMESITE"] = "Lax"
 app.config["SESSION_COOKIE_SECURE"] = is_production
 
+UPLOAD_FOLDER = Path(__file__).parent / "static" / "uploads"
+UPLOAD_FOLDER.mkdir(parents=True, exist_ok=True)
+ALLOWED_EXTENSIONS = {"jpg", "jpeg", "png", "webp", "gif"}
+app.config["UPLOAD_FOLDER"] = str(UPLOAD_FOLDER)
+app.config["MAX_CONTENT_LENGTH"] = 8 * 1024 * 1024  # 8 MB
+
+
+def _allowed_file(filename: str) -> bool:
+    return "." in filename and filename.rsplit(".", 1)[1].lower() in ALLOWED_EXTENSIONS
+
+
+def _save_upload(file) -> Optional[str]:
+    """Save uploaded file, return relative path or None."""
+    if not file or file.filename == "":
+        return None
+    if not _allowed_file(file.filename):
+        return None
+    ext = secure_filename(file.filename).rsplit(".", 1)[-1].lower()
+    fname = f"{uuid.uuid4().hex}.{ext}"
+    file.save(UPLOAD_FOLDER / fname)
+    return fname
+
 login_manager = LoginManager(app)
 login_manager.login_view = "login"
 login_manager.login_message = "Please log in to continue."
@@ -170,6 +195,17 @@ def index():
     total_fat = sum(e.fat_g or 0 for e in entries)
     goal = get_calorie_goal(user_id=current_user.id)
     protein_goal, carbs_goal, fat_goal = get_macro_targets(user_id=current_user.id)
+
+    # Last 7 days for dashboard charts
+    recent_rows = fetch_recent_days(user_id=current_user.id, limit=7)
+    days_map = {r["day"]: r["total_calories"] or 0 for r in recent_rows}
+    chart_labels = []
+    chart_calories = []
+    for i in range(6, -1, -1):
+        d = (today - timedelta(days=i)).isoformat()
+        chart_labels.append(d[5:])  # "MM-DD"
+        chart_calories.append(days_map.get(d, 0))
+
     return render_template(
         "index.html",
         entries=entries,
@@ -182,6 +218,8 @@ def index():
         protein_goal=protein_goal,
         carbs_goal=carbs_goal,
         fat_goal=fat_goal,
+        chart_labels=chart_labels,
+        chart_calories=chart_calories,
     )
 
 
@@ -214,7 +252,8 @@ def add():
     except ValueError:
         return redirect(url_for("index"))
 
-    add_entry(food=food, calories=calories, notes=notes, user_id=current_user.id)
+    photo_path = _save_upload(request.files.get("photo"))
+    add_entry(food=food, calories=calories, notes=notes, user_id=current_user.id, photo_path=photo_path)
     return redirect(url_for("index"))
 
 
@@ -298,12 +337,15 @@ def day_view(day_str: str):
 @app.route("/history", methods=["GET"])
 @login_required
 def history():
-    rows = fetch_recent_days(user_id=current_user.id, limit=60)
+    rows = fetch_recent_days(user_id=current_user.id, limit=90)
     days = [
         {"day": r["day"], "total_calories": r["total_calories"] or 0, "entry_count": r["items"]}
         for r in rows
     ]
-    return render_template("history.html", days=days)
+    # Dict for heatmap lookup: {"2026-05-01": 1500, ...}
+    heatmap_data = {r["day"]: r["total_calories"] or 0 for r in rows}
+    goal = get_calorie_goal(user_id=current_user.id)
+    return render_template("history.html", days=days, heatmap_data=heatmap_data, goal=goal)
 
 
 @app.route("/foods/search", methods=["GET", "POST"])
